@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from scripts.migrate_to_sqlite import main as migrate_to_sqlite
 from src import db, distance, google_api
 from src.aliases import canonical_map
 from src.estimate import estimate
@@ -23,6 +24,18 @@ from src.robust import mad_outlier_mask
 from src.vehicles import vehicle_class
 
 st.set_page_config(page_title="Transport price lookup", page_icon="🚚", layout="wide")
+
+
+@st.cache_resource(show_spinner="Building pricing.db from the committed data files…")
+def ensure_db():
+    """pricing.db is not committed to git (too large for GitHub) - on a fresh checkout
+    (e.g. Streamlit Cloud) rebuild it from the small CSV/parquet/JSON files that are."""
+    if not db.DB_PATH.exists():
+        migrate_to_sqlite()
+    return True
+
+
+ensure_db()
 
 
 def _tex_num(x: float, decimals: int = 0) -> str:
