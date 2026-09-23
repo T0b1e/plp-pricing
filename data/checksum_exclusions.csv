@@ -1,7 +1,7 @@
 ﻿reason,rows,price_sum,pct_rows
-used_in_model,26261.0,128036325.71,88.7
-no_route (column AB blank),1645.0,3578257.32,5.6
-"single_stop (fee or distribution line, no destination)",1553.0,2333118.84,5.2
-price_zero_or_blank,81.0,0.0,0.3
-km_missing (ungeocoded stop / failed leg / same place),52.0,320912.0,0.2
-TOTAL,29592.0,134268613.87,100.0
+used_in_model,33917.0,162282121.95,89.3
+no_route (column AB blank),2034.0,4667756.56,5.4
+"single_stop (fee or distribution line, no destination)",1813.0,2653140.5100000002,4.8
+km_missing (ungeocoded stop / failed leg / same place),119.0,1421207.78,0.3
+price_zero_or_blank,86.0,0.0,0.2
+TOTAL,37969.0,171024226.79999998,100.0

@@ -10,8 +10,9 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from . import google_api as g
-from .files import read_csv, read_json, write_csv, write_json
-from .paths import GEOCODE_CACHE, LOCATIONS
+from . import db
+from .files import read_csv, write_csv
+from .paths import LOCATIONS
 
 LOCKED_SOURCES = {"manual"}
 MAX_FAILS_IN_A_ROW = 10
@@ -27,11 +28,11 @@ def default_query(token: str) -> str:
 
 
 def load_cache() -> dict:
-    return read_json(GEOCODE_CACHE)
+    return db.load_geocode_cache()
 
 
 def save_cache(cache: dict):
-    write_json(GEOCODE_CACHE, cache, ensure_ascii=False, indent=1)
+    db.save_geocode_cache(cache)
 
 
 FOREIGN = re.compile(r"มาเลเซีย|Malaysia|เมียนมา|Myanmar|ลาว\b|Laos|กัมพูชา|Cambodia")

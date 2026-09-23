@@ -6,11 +6,8 @@ DATA.mkdir(exist_ok=True)
 
 SOURCE_FILES = sorted(ROOT.glob("Report AR_AP_*.xlsx"))
 
-TRIPS_RAW = DATA / "trips_raw.parquet"
-TRIPS_PARSED = DATA / "trips_parsed.parquet"
+# locations_master.csv stays a plain file: it is hand-edited in Excel to fix geocoding
+# (see src/geocode.py). Everything else the pipeline hands between stages
+# (trips_raw, trips_parsed, trips_clean, rate_table, model_summary) plus the two API
+# result caches now live in data/pricing.db - see src/db.py.
 LOCATIONS = DATA / "locations_master.csv"
-GEOCODE_CACHE = DATA / "geocode_cache.json"
-DISTANCE_CACHE = DATA / "distance_cache.json"
-TRIPS_CLEAN = DATA / "trips_clean.csv"
-RATE_TABLE = DATA / "rate_table.csv"
-MODEL_SUMMARY = DATA / "model_summary.csv"

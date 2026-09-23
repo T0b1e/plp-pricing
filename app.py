@@ -6,17 +6,19 @@ Tab 2: km + vehicle -> model estimate, cross-checked against real trips of simil
 Reads the pipeline outputs in data/. The only API call is an optional Routes lookup for a
 route that has never been billed, and its result goes into the same distance cache.
 """
+import json
+
 import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src import distance, google_api
+from src import db, distance, google_api
 from src.aliases import canonical_map
 from src.estimate import estimate
 from src.files import DataFileError, read_csv, require_columns
 from src.fit_model import ALL
-from src.paths import LOCATIONS, MODEL_SUMMARY, RATE_TABLE, TRIPS_CLEAN, TRIPS_PARSED
+from src.paths import EPPO_DIESEL, LOCATIONS
 from src.robust import mad_outlier_mask
 from src.vehicles import vehicle_class
 
@@ -241,9 +243,9 @@ MODEL_CFG = {   # model_table(): one row per vehicle class
 @st.cache_resource(show_spinner="Loading trips…")
 def load_trips() -> tuple[pd.DataFrame, str | None]:
     """Trips plus a warning if road km could not be attached (the rest still works without it)."""
-    if not TRIPS_PARSED.exists():
-        raise DataFileError(f"{TRIPS_PARSED.name} not found - run `python main.py --to parse` first.")
-    t = pd.read_parquet(TRIPS_PARSED)
+    if not db.table_exists("trips_parsed"):
+        raise DataFileError("trips_parsed table not found - run `python main.py --to parse` first.")
+    t = db.read_table("trips_parsed", json_cols=["stops", "conditions", "non_place"])
     canon = canonical_map()
     t = t[t["stop_count"] >= 2].copy()
     t["origin_c"] = t["origin"].map(lambda s: canon.get(s, s))
@@ -258,20 +260,47 @@ def load_trips() -> tuple[pd.DataFrame, str | None]:
     t["origin_latlon"] = t["origin_c"].map(ll).fillna("")
     t["dest_latlon"] = t["dest_c"].map(ll).fillna("")
     t["ship_date"] = pd.to_datetime(t["ship_date"], errors="coerce")
+    eppo = load_eppo_diesel()
+    if not eppo.empty:
+        # nearest published EPPO reading to ship_date, no cutoff - EPPO publishing lags real time
+        # by weeks/months, so a trip more recent than the latest reading still gets that reading
+        # rather than being left blank. merge_asof needs both sides sorted on the join key
+        dated = t[t["ship_date"].notna()].sort_values("ship_date")
+        matched = pd.merge_asof(dated, eppo, left_on="ship_date", right_on="date", direction="nearest")
+        t["eppo_price"] = matched["eppo_price"].reindex(t.index)
+    else:
+        t["eppo_price"] = np.nan
     fuel_cols = ["fuel_rate_bracket", "fuel_rate_low", "fuel_rate_high"]
     t["total_km"] = np.nan
     for c in fuel_cols:
         t[c] = np.nan
     warning = None
-    if TRIPS_CLEAN.exists():
+    if db.table_exists("trips_clean"):
         try:
             extra_cols = ["job_order_no", "total_km", *fuel_cols]
-            extra = read_csv(TRIPS_CLEAN, usecols=extra_cols, dtype={"job_order_no": str})
+            extra = db.read_table("trips_clean")[extra_cols]
+            extra["job_order_no"] = extra["job_order_no"].astype(str)
             t = t.drop(columns=["total_km", *fuel_cols]) \
                  .merge(extra.drop_duplicates("job_order_no"), on="job_order_no", how="left")
         except Exception as e:   # e.g. the pipeline is rewriting it right now
-            warning = f"Road km per trip not loaded ({TRIPS_CLEAN.name}: {e}). Press Reload data to retry."
+            warning = f"Road km per trip not loaded (trips_clean table: {e}). Press Reload data to retry."
     return t, warning
+
+
+@st.cache_resource(show_spinner="Loading EPPO diesel reference price…")
+def load_eppo_diesel() -> pd.DataFrame:
+    """EPPO HSD B7 reference price (scripts/fetch_eppo_diesel.py), one row per published date.
+
+    Empty frame (not an error) if the file hasn't been fetched yet - the divergence column
+    just stays blank until someone runs the script.
+    """
+    if not EPPO_DIESEL.exists():
+        return pd.DataFrame(columns=["date", "eppo_price"])
+    with EPPO_DIESEL.open(encoding="utf-8") as f:
+        raw = json.load(f)
+    e = pd.DataFrame(raw.values())
+    e["date"] = pd.to_datetime(e["date"])
+    return e[["date", "no_bias"]].rename(columns={"no_bias": "eppo_price"}).sort_values("date")
 
 
 @st.cache_resource(show_spinner="Loading places…")
@@ -283,9 +312,9 @@ def load_locations() -> pd.DataFrame:
 
 @st.cache_data(show_spinner="Loading price model…")
 def load_model():
-    if not (MODEL_SUMMARY.exists() and RATE_TABLE.exists()):
+    if not (db.table_exists("model_summary") and db.table_exists("rate_table")):
         return None, None
-    return read_csv(MODEL_SUMMARY), read_csv(RATE_TABLE)
+    return db.read_table("model_summary"), db.read_table("rate_table")
 
 
 def reload_button():
@@ -377,6 +406,31 @@ def model_table(km: float, stops: int) -> pd.DataFrame:
                      "trips_in_model": int(e["n"]), "method": e["method"],
                      "holdout_error_%": e["test_mdape_pct"],
                      "note": "outside data range" if e["extrapolated"] else ""})
+    return pd.DataFrame(rows)
+
+
+# distance bins picked from the real spread of trips_clean.total_km: each covers a meaningful
+# share of actual trips, using the midpoint as the representative km fed into estimate()
+BIN_RANGES = [
+    ("0-10", 5), ("11-20", 15), ("21-30", 25), ("31-50", 40), ("51-100", 75),
+    ("101-150", 125), ("151-200", 175), ("201-300", 250), ("301-500", 400), ("500+", 650),
+]
+
+
+def bin_rate_table(stops: int = 2) -> pd.DataFrame:
+    """One row per distance bin, one column per vehicle class - a quick overview grid.
+
+    Cells are formatted THB strings with a trailing '*' where the km is outside that vehicle
+    class's own training data (extrapolated, rough guide only).
+    """
+    classes = summary.loc[summary["vehicle_class"] != ALL].sort_values("n", ascending=False)["vehicle_class"].tolist()
+    rows = []
+    for label, km in BIN_RANGES:
+        row = {"Range (km)": label, "km": km}
+        for name in classes:
+            e = estimate(km, name, stops, summary, rates)
+            row[name] = f"{e['price']:,.0f}" + ("*" if e["extrapolated"] else "")
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -499,7 +553,7 @@ def road_km(origin: str, dest: str) -> tuple[float | None, str]:
     except ValueError:
         return None, "lat/lon in locations_master.csv is not a number for one of these places"
     try:
-        cache = distance.load_cache()
+        cache = db.load_distance_cache()
     except DataFileError as e:
         return None, str(e)
     if cache.get(key, {}).get("km") is not None:
@@ -516,24 +570,23 @@ def road_km(origin: str, dest: str) -> tuple[float | None, str]:
         return None, "no GOOGLE_MAPS_API_KEY in .env on the machine running this page"
     if v.get("km") is None:   # not cached: a failed lookup should be retryable
         return None, f"Routes API: {v.get('error', 'no route')}"
-    cache[k] = v
     try:
-        distance.save_cache(cache)
+        db.upsert_distance(k, v)   # writes only this key - safe with other users clicking at the same time
     except Exception as e:   # the km is still good for this page view
         st.toast(f"Road km not saved to the cache: {e}")
     return v["km"], "Google Routes API"
 
 
 def need_model():
-    """Shown wherever a model estimate is requested but data/model_summary.csv hasn't been built yet."""
-    st.info("The price model is not built yet (no `data/model_summary.csv`). Finish geocoding, "
+    """Shown wherever a model estimate is requested but the model_summary table hasn't been built yet."""
+    st.info("The price model is not built yet (no `model_summary` table). Finish geocoding, "
             "then run `python main.py --from distance`. Historical prices by route still work.")
 
 
 def model_failed(e: Exception):
-    """Shown wherever estimate()/model_table() raises - usually a stale or malformed model file."""
+    """Shown wherever estimate()/model_table() raises - usually a stale or malformed model table."""
     st.error(f"Model estimate failed: {type(e).__name__}: {e}")
-    st.caption("`data/model_summary.csv` may be from an older pipeline version - rerun "
+    st.caption("The `model_summary` table may be from an older pipeline version - rerun "
                "`python main.py --from model`, then Reload data.")
 
 
@@ -584,6 +637,16 @@ with tab_dashboard:
                "and a modified-Z-trimmed mean - each recomputed after dropping its own outliers. "
                "N is the trip count that mean is based on.")
 
+    dash_f1, dash_f2 = st.columns(2)
+    dash_vehicle_opts = sorted(trips["vehicle_class"].dropna().unique())
+    dash_customer_opts = sorted(trips["customer"].dropna().unique())
+    dash_vehicle = dash_f1.multiselect(
+        "Vehicle type", dash_vehicle_opts, default=dash_vehicle_opts,
+        help="Show only these truck classes. All selected by default.")
+    dash_customer = dash_f2.multiselect(
+        "Customer", dash_customer_opts, default=dash_customer_opts,
+        help="Show only routes billed to these customers. All selected by default.")
+
     def stats_row(values: np.ndarray) -> dict:
         s = cutoff_price_stats(values)
         return {"Avg.Price (before cut-off)": s["avg"], "N (before cut-off)": s["n"],
@@ -607,11 +670,63 @@ with tab_dashboard:
         return (f"https://www.google.com/maps/dir/?api=1&origin={o_lat},{o_lon}"
                 f"&destination={d_lat},{d_lon}&travelmode=driving")
 
+    def gas_divergence_value(g: pd.DataFrame) -> tuple[float, float, float] | None:
+        """(diff, pct, eppo_base) median (billed top-of-band fuel rate) - (EPPO HSD B7 price on that
+        trip's ship date), THB/litre and as a % of the EPPO price, plus the EPPO base price itself.
+        None where no row has both sides present."""
+        mask = g["fuel_rate_high"].notna() & g["eppo_price"].notna()
+        if not mask.any():
+            return None
+        base = g.loc[mask, "eppo_price"].median()
+        diff = (g.loc[mask, "fuel_rate_high"] - g.loc[mask, "eppo_price"]).median()
+        pct = diff / base * 100 if base else np.nan
+        return diff, pct, base
+
+    def gas_divergence_resolved(
+        g: pd.DataFrame, fallback: tuple[float, float, float] | None = None
+    ) -> tuple[float, float, float, bool] | None:
+        """(diff, pct, base, estimated) for this route, falling back to a same-car-type/global
+        estimate when this route has no trip with both a billed fuel rate and an EPPO price."""
+        own = gas_divergence_value(g)
+        if own is not None:
+            return (*own, False)
+        if fallback is not None:
+            return (*fallback, True)
+        return None
+
+    def gas_price_base_text(resolved: tuple[float, float, float, bool] | None) -> str | None:
+        if resolved is None:
+            return None
+        _, _, base, estimated = resolved
+        return f"{base:.2f}{' (est.)' if estimated else ''}"
+
+    def gas_divergence_text(resolved: tuple[float, float, float, bool] | None) -> str | None:
+        if resolved is None:
+            return None
+        diff, pct, _, estimated = resolved
+        sign = "+" if diff >= 0 else ""
+        return f"{sign}{diff:.2f} ({sign}{pct:.1f}%){' (est.)' if estimated else ''}"
+
     OTHER_CFG = {
         "Gas Price Range": TxtCol(
             "Gas Price Range",
             help="Median fuel-rate band (THB/litre) billed on this route - partial coverage, blank "
                  "where no trip on this route/class carries a fuel clause."),
+        "EPPO Base Price": TxtCol(
+            "EPPO Base Price",
+            help="Median EPPO published HSD B7 diesel retail price (THB/litre) nearest each trip's ship "
+                 "date (data/eppo_diesel_hsd_b7.json, run scripts/fetch_eppo_diesel.py to update) - the "
+                 "base the divergence next to it is measured against. Where the route has no billed fuel "
+                 "clause at all, this falls back to the same car type's median (or the overall median if "
+                 "that car type has none either), marked '(est.)'."),
+        "Gas Price Divergence": TxtCol(
+            "Gas Price Divergence",
+            help="Median gap between the billed top-of-band fuel rate and the EPPO base price (see "
+                 "'EPPO Base Price' column) - THB/litre and as a % of the EPPO price. Positive = billed "
+                 "above the published market price. Where the route has no billed fuel clause at all, "
+                 "this falls back to the same car type's median divergence (or the overall median if "
+                 "that car type has none either), marked '(est.)'; every trip otherwise gets EPPO's "
+                 "nearest published reading, even past the newest date EPPO has published so far."),
         "Existing pair price (min-max)": TxtCol(
             "Existing pair price (min-max)",
             help="Min-max range actually billed on this route. The alternative calculation method - "
@@ -628,16 +743,36 @@ with tab_dashboard:
 
     priced = trips[trips["vehicle_class"].notna() & (trips["origin_c"] != "") & (trips["dest_c"] != "")
                    & (trips["price"] > 0)]
-    route_rows = pd.DataFrame([
-        {"Car Type": vc, "Ori": o, "Dest": d,
-         "Total KM": g["total_km"][g["total_km"] > 0].median(),
-         "Route Map": maps_route_url(g["origin_latlon"].iloc[0], g["dest_latlon"].iloc[0]),
-         **stats_row(g["price"].to_numpy()),
-         "Existing pair price (min-max)": f"{g['price'].min():,.0f}-{g['price'].max():,.0f}",
-         "Gas Price Range": (f"{g['fuel_rate_low'].median():.2f}-{g['fuel_rate_high'].median():.2f}"
-                             if g["fuel_rate_low"].notna().any() and g["fuel_rate_high"].notna().any() else None)}
-        for (vc, o, d), g in priced.groupby(["vehicle_class", "origin_c", "dest_c"])
-    ]).sort_values(["Car Type", "Ori", "N (before cut-off)"], ascending=[True, True, False]).reset_index(drop=True)
+    if dash_vehicle:
+        priced = priced[priced["vehicle_class"].isin(dash_vehicle)]
+    if dash_customer:
+        priced = priced[priced["customer"].isin(dash_customer)]
+    global_gas_divergence = gas_divergence_value(priced)
+    vehicle_gas_divergence = {
+        vc: gas_divergence_value(g) for vc, g in priced.groupby("vehicle_class")
+    }
+    route_row_list = []
+    for (vc, o, d), g in priced.groupby(["vehicle_class", "origin_c", "dest_c"]):
+        sr = stats_row(g["price"].to_numpy())
+        fallback = vehicle_gas_divergence.get(vc) or global_gas_divergence
+        resolved = gas_divergence_resolved(g, fallback=fallback)
+        route_row_list.append({
+            "Car Type": vc, "Ori": o, "Dest": d,
+            "Total KM": g["total_km"][g["total_km"] > 0].median(),
+            "Route Map": maps_route_url(g["origin_latlon"].iloc[0], g["dest_latlon"].iloc[0]),
+            **sr,
+            "Existing pair price (min-max)": f"{g['price'].min():,.0f}-{g['price'].max():,.0f}",
+            "Gas Price Range": (f"{g['fuel_rate_low'].median():.2f}-{g['fuel_rate_high'].median():.2f}"
+                                if g["fuel_rate_low"].notna().any() and g["fuel_rate_high"].notna().any()
+                                else None),
+            "EPPO Base Price": gas_price_base_text(resolved),
+            "Gas Price Divergence": gas_divergence_text(resolved),
+        })
+    if route_row_list:
+        route_rows = pd.DataFrame(route_row_list).sort_values(
+            ["Car Type", "Ori", "N (before cut-off)"], ascending=[True, True, False]).reset_index(drop=True)
+    else:
+        route_rows = pd.DataFrame(route_row_list)
 
     def diverging_mask(df: pd.DataFrame, tol: float = 0.005) -> pd.Series:
         """True where a cut-off mean moved >tol (relative) from the before-cut-off mean - i.e. that
@@ -648,39 +783,136 @@ with tab_dashboard:
             moved |= (df[col] - before).abs() > tol * before.abs().clip(lower=1)
         return moved
 
+    def with_summary_row(df: pd.DataFrame) -> pd.DataFrame:
+        """Append a SUMMARY row: total trips + trip-weighted average price per method, overall trimmed %."""
+        if df.empty:
+            return df
+        summary = {"Car Type": f"SUMMARY ({len(df):,} routes)"}
+        for avg_col, n_col in [("Avg.Price (before cut-off)", "N (before cut-off)"),
+                                ("Avg.Price (3-sigma, after cut-off)", "N (3-sigma, after cut-off)"),
+                                ("Avg.Price (modi-Z, after cut-off)", "N (modi-Z, after cut-off)")]:
+            n_sum = df[n_col].sum()
+            summary[n_col] = n_sum
+            summary[avg_col] = (df[avg_col] * df[n_col]).sum() / n_sum if n_sum else np.nan
+        return pd.concat([df, pd.DataFrame([summary])], ignore_index=True)
+
+    def gas_divergence_pct(df: pd.DataFrame) -> pd.Series:
+        """Parsed +/-% out of the 'Gas Price Divergence' text cell, NaN where blank/absent."""
+        if "Gas Price Divergence" not in df.columns:
+            return pd.Series(np.nan, index=df.index)
+        return (df["Gas Price Divergence"].fillna("")
+                .str.extract(r"\(([+-]?[\d.]+)%\)", expand=False).astype(float))
+
     def highlight_diverging(df: pd.DataFrame):
         moved = diverging_mask(df)
-        return df.style.apply(lambda row: ["background-color: #fff3b0" if moved.loc[row.name] else ""] * len(row),
-                               axis=1)
+        gas_pct = gas_divergence_pct(df)
+        gas_col = "Gas Price Divergence"
+        pct_tol = 5.0
+        def _row(row):
+            if str(row["Car Type"]).startswith("SUMMARY"):
+                return [""] * len(row)
+            styles = ["background-color: #fff3b0" if moved.loc[row.name] else "" for _ in row.index]
+            if gas_col in row.index:
+                pct = gas_pct.loc[row.name]
+                if pd.notna(pct) and abs(pct) > pct_tol:
+                    color = "#ffadad" if pct > 0 else "#b9f6ca"  # red = billed above EPPO, green = below
+                    styles[row.index.get_loc(gas_col)] = f"background-color: {color}"
+            return styles
+        return df.style.apply(_row, axis=1)
 
-    f1, f2 = st.columns(2)
-    diverge_only = f1.checkbox("Show only diverging rows (cut-off actually trimmed something)")
-    fuel_only = f2.checkbox("Only routes with fuel-range data")
-    if diverge_only:
-        route_rows = route_rows[diverging_mask(route_rows)].reset_index(drop=True)
-    if fuel_only:
-        route_rows = route_rows[route_rows["Gas Price Range"].notna()].reset_index(drop=True)
+    if route_rows.empty:
+        st.info("No billed trips match this vehicle type / customer combination.")
+    else:
+        f1, f2 = st.columns(2)
+        diverge_only = f1.checkbox("Show only diverging rows (cut-off actually trimmed something)")
+        fuel_only = f2.checkbox("Only routes with fuel-range data")
+        if diverge_only:
+            route_rows = route_rows[diverging_mask(route_rows)].reset_index(drop=True)
+        if fuel_only:
+            route_rows = route_rows[route_rows["Gas Price Range"].notna()].reset_index(drop=True)
 
-    dup_car = route_rows["Car Type"] == route_rows["Car Type"].shift()
-    dup_ori = dup_car & (route_rows["Ori"] == route_rows["Ori"].shift())
-    route_rows.loc[dup_ori, "Ori"] = ""
-    route_rows.loc[dup_car, "Car Type"] = ""
+        route_rows = with_summary_row(route_rows)
+        dup_car = route_rows["Car Type"] == route_rows["Car Type"].shift()
+        dup_ori = dup_car & (route_rows["Ori"] == route_rows["Ori"].shift())
+        route_rows.loc[dup_ori & (route_rows["Ori"].notna()), "Ori"] = ""
+        route_rows.loc[dup_car & ~route_rows["Car Type"].str.startswith("SUMMARY"), "Car Type"] = ""
 
-    st.caption(f"{len(route_rows):,} routes shown. 🟡 Highlighted rows are where a cut-off method actually "
-               "trimmed something - its mean moved from the before-cut-off mean by more than 0.5%.")
-    st.dataframe(highlight_diverging(route_rows), hide_index=True, width="stretch",
-                 column_config={**dash_column_config("THB per trip, after each method's outlier cutoff."),
-                                **OTHER_CFG, **MAP_CFG})
+        st.caption(f"{len(route_rows) - 1:,} routes shown. 🟡 Highlighted rows are where a cut-off method actually "
+                   "trimmed something - its mean moved from the before-cut-off mean by more than 0.5%. Gas Price "
+                   "Divergence cells are highlighted 🔴 red where the billed fuel rate is more than 5% above "
+                   "EPPO's published price, or 🟢 green where it's more than 5% below. Last row is a "
+                   "trip-weighted summary across every route currently shown.")
+        st.dataframe(highlight_diverging(route_rows), hide_index=True, width="stretch",
+                     column_config={**dash_column_config("THB per trip, after each method's outlier cutoff."),
+                                    **OTHER_CFG, **MAP_CFG})
 
     st.subheader("Per KM")
-    per_km_src = trips[trips["vehicle_class"].notna() & (trips["price"] > 0) & (trips["total_km"] > 0)].copy()
+    per_km_src = priced[priced["total_km"] > 0].copy()
     per_km_src["price_per_km"] = per_km_src["price"] / per_km_src["total_km"]
-    per_km_rows = pd.DataFrame([
-        {"Car Type": vc, **stats_row(g["price_per_km"].to_numpy())}
-        for vc, g in per_km_src.groupby("vehicle_class")
-    ]).sort_values("Car Type").reset_index(drop=True)
-    st.dataframe(per_km_rows, hide_index=True, width="stretch",
-                 column_config=dash_column_config("THB per km, after each method's outlier cutoff.", decimals=2))
+    per_km_row_list = [{"Car Type": vc, **stats_row(g["price_per_km"].to_numpy())}
+                       for vc, g in per_km_src.groupby("vehicle_class")]
+    if per_km_row_list:
+        per_km_rows = pd.DataFrame(per_km_row_list).sort_values("Car Type").reset_index(drop=True)
+        st.dataframe(per_km_rows, hide_index=True, width="stretch",
+                     column_config=dash_column_config("THB per km, after each method's outlier cutoff.",
+                                                       decimals=2))
+    else:
+        st.info("No trips with road km match this vehicle type / customer combination.")
+
+    st.subheader("Route builder (demo)")
+    st.caption(
+        "Demo only - pick an origin and destination, then add stop points in between. Each stop has a "
+        "**Can use** toggle to mark it usable or not; nothing here feeds the price model yet, it's just "
+        "a preview of the route order and the map link.")
+
+    if "dash_stops" not in st.session_state:
+        st.session_state.dash_stops = []
+
+    place_opts = sorted(locs.index)
+    r1, r2 = st.columns(2)
+    demo_origin = r1.selectbox("Origin", place_opts, index=None, placeholder="Type to search…", key="dash_origin")
+    demo_dest = r2.selectbox("Destination", place_opts, index=None, placeholder="Type to search…", key="dash_dest")
+
+    if st.button("+ Add stop point"):
+        st.session_state.dash_stops.append({"place": None, "usable": True})
+        st.rerun()
+
+    remove_idx = None
+    for i, stop in enumerate(st.session_state.dash_stops):
+        s1, s2, s3 = st.columns([5, 2, 1])
+        cur_index = place_opts.index(stop["place"]) if stop["place"] in place_opts else None
+        stop["place"] = s1.selectbox(f"Stop {i + 1}", place_opts, index=cur_index,
+                                     placeholder="Type to search…", key=f"dash_stop_{i}")
+        stop["usable"] = s2.checkbox("Can use", value=stop["usable"], key=f"dash_stop_usable_{i}")
+        if s3.button("✕", key=f"dash_stop_remove_{i}", help="Remove this stop"):
+            remove_idx = i
+    if remove_idx is not None:
+        st.session_state.dash_stops.pop(remove_idx)
+        st.rerun()
+
+    if demo_origin and demo_dest:
+        used_stops = [s for s in st.session_state.dash_stops if s["place"]]
+        route_places = [demo_origin] + [s["place"] for s in used_stops] + [demo_dest]
+        usable_flags = [True] + [s["usable"] for s in used_stops] + [True]
+        st.write(" → ".join(f"{p}" + ("" if u else " 🚫 can't use") for p, u in zip(route_places, usable_flags)))
+
+        if not all(usable_flags):
+            st.warning("One or more stops are marked **Can't use** - map link disabled until every "
+                       "stop is usable (demo rule only).")
+        else:
+            coords = []
+            for p in route_places:
+                row = locs.loc[p]
+                if row["lat"] and row["lon"]:
+                    coords.append((row["lat"], row["lon"]))
+            if len(coords) != len(route_places):
+                st.caption("Some stops don't have coordinates yet, so the map link can't be built.")
+            else:
+                url = (f"https://www.google.com/maps/dir/?api=1&origin={coords[0][0]},{coords[0][1]}"
+                      f"&destination={coords[-1][0]},{coords[-1][1]}&travelmode=driving")
+                if len(coords) > 2:
+                    url += "&waypoints=" + "|".join(f"{a},{b}" for a, b in coords[1:-1])
+                st.link_button("🛣️ Open route on Google Maps", url)
 
 # ---------- tab 1: origin -> destination ----------
 
@@ -715,8 +947,10 @@ with tab_route:
         if len(found):
             # --- historical trips found: show summary + full trip list ---
             f1, f2 = st.columns(2)
-            vc = f1.multiselect("Vehicle class", sorted(found["vehicle_class"].dropna().unique()))
-            cu = f2.multiselect("Customer", sorted(found["customer"].dropna().unique()))
+            vc_opts = sorted(found["vehicle_class"].dropna().unique())
+            cu_opts = sorted(found["customer"].dropna().unique())
+            vc = f1.multiselect("Vehicle class", vc_opts, default=vc_opts)
+            cu = f2.multiselect("Customer", cu_opts, default=cu_opts)
             if vc:
                 found = found[found["vehicle_class"].isin(vc)]
             if cu:
@@ -941,7 +1175,8 @@ with tab_fuel:
             "Compare specific customers (optional)", fd_customers, max_selections=MAX_FUEL_SERIES,
             help="Each customer's contract can reference a different band. Leave empty for the overall "
                  "trend across every customer pooled together.")
-        veh_filter = f2.multiselect("Vehicle class", sorted(fd["vehicle_class"].dropna().unique()))
+        veh_opts = sorted(fd["vehicle_class"].dropna().unique())
+        veh_filter = f2.multiselect("Vehicle class", veh_opts, default=veh_opts)
         if veh_filter:
             fd = fd[fd["vehicle_class"].isin(veh_filter)]
 
@@ -1003,15 +1238,17 @@ with tab_fuel:
         st.caption("Number of billed trips that reference each fuel-rate band, low to high. Bands come "
                    "straight from the route text, so a customer's contract can use a narrow or wide band.")
 
-        # --- raw numbers behind the time-series chart ---
-        st.subheader("Monthly detail")
-        st.caption("The numbers behind the line chart above, pooled across all customers.")
-        gm = fuel_rate_monthly(fd)
-        st.dataframe(gm.rename(columns={"month": "Month", "n": "Trips", "min": "Min", "median": "Median",
-                                        "max": "Max"}),
-                    hide_index=True, width="stretch",
-                    column_config={"Month": DateCol("Month", format="MMM YYYY"),
-                                   "Trips": NumCol("Trips", format="%d"),
-                                   "Min": NumCol("Min (THB/litre)", format="%.2f"),
-                                   "Median": NumCol("Median (THB/litre)", format="%.2f"),
-                                   "Max": NumCol("Max (THB/litre)", format="%.2f")})
+    st.divider()
+    st.subheader("Estimated price by distance range × vehicle class")
+    st.caption("Model price (THB/trip, A→B) at a representative km within each range. Ranges are picked "
+               "from the real spread of billed trip distances, so each one covers a meaningful share of "
+               "actual trips. '*' = this km is outside that vehicle class's own training data - "
+               "extrapolated, rough guide only.")
+    if summary is None:
+        need_model()
+    else:
+        try:
+            bin_cfg = {"Range (km)": TxtCol("Range (km)"), "km": NumCol("km", help="Representative km used for the estimate in this row", format="%d")}
+            st.dataframe(bin_rate_table(), hide_index=True, width="stretch", column_config=bin_cfg)
+        except Exception as e:
+            model_failed(e)

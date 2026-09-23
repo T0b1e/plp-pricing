@@ -10,9 +10,10 @@ coordinates and km are.
 import pandas as pd
 from openpyxl.utils import get_column_letter
 
+from . import db
 from .aliases import canonical_map
 from .files import DataFileError, read_csv, write_csv
-from .paths import DATA, LOCATIONS, TRIPS_CLEAN
+from .paths import DATA, LOCATIONS
 
 TRIP_XLSX = DATA / "trip_table.xlsx"
 TRIP_CSV = DATA / "trip_table.csv"
@@ -46,7 +47,8 @@ COLUMNS = {   # trips_clean column -> header
 
 
 def build() -> pd.DataFrame:
-    df = read_csv(TRIPS_CLEAN, dtype={"job_order_no": str})
+    df = db.read_table("trips_clean")
+    df["job_order_no"] = df["job_order_no"].astype(str)
     loc = read_csv(LOCATIONS, dtype=str).fillna("")
     conf = dict(zip(loc["token"], loc["geocode_confidence"].replace("", "not geocoded")))
     canon = canonical_map()

@@ -41,19 +41,34 @@ Parts that need the model show a notice until `main.py --from distance` has been
 rerunning the pipeline, press **Reload data** in the sidebar.
 
 New monthly files dropped into the folder are picked up automatically. All Google results are
-cached in `data/*_cache.json`, so reruns only pay for places and legs not seen before.
+cached in `data/pricing.db` (the `distance_cache`/`geocode_cache` tables), so reruns only pay for
+places and legs not seen before - each cache row is upserted individually, so a Streamlit user
+clicking "look up road km" never races the batch pipeline (or another user) over a whole-file
+rewrite the way the old `data/*_cache.json` files could.
 
 ## Pipeline
 
+Every stage but `geocode` (which edits `locations_master.csv` directly) hands its output to the
+next one through `data/pricing.db` (see `src/db.py`) rather than a CSV/parquet file - a table is
+fully rebuilt on every run, same as the old files were. `locations_master.csv` is the one
+exception: it stays a plain file because it is hand-edited in Excel to fix geocoding (see below).
+
 | Step | Module | Output |
 |---|---|---|
-| load | `src/load.py` | `data/trips_raw.parquet` |
-| parse | `src/parse_route.py`: splits column AB `เส้นทางขนส่ง` into ordered stops | `data/trips_parsed.parquet`, `data/locations_master.csv` |
+| load | `src/load.py` | `trips_raw` table |
+| parse | `src/parse_route.py`: splits column AB `เส้นทางขนส่ง` into ordered stops | `trips_parsed` table, `data/locations_master.csv` |
 | aliases | `src/aliases.py`: merges spellings of one place | `alias_of` column, `data/alias_suggestions.csv` |
 | geocode | `src/geocode.py`: Places Text Search → Geocoding fallback | lat/lon in `locations_master.csv` |
-| distance | `src/distance.py`: Routes API, legs summed for multi-stop | `data/trips_clean.csv` |
-| model | `src/fit_model.py`: `price = base + rate × km + fee × extra_drops` per vehicle | `data/model_summary.csv`, `data/rate_table.csv` |
+| distance | `src/distance.py`: Routes API, legs summed for multi-stop | `trips_clean` table |
+| model | `src/fit_model.py`: `price = base + rate × km + fee × extra_drops` per vehicle | `model_summary`, `rate_table` tables |
 | checksum | `src/checksum.py`: row count + price/contractor totals per file, every stage vs the xlsx (read independently); training-set exclusions by reason | `data/checksum.csv`, `data/checksum_exclusions.csv` |
+
+`export` (`src/export.py`) reads the `trips_clean` table and writes the human-facing deliverable,
+`data/trip_table.csv`/`.xlsx`.
+
+Upgrading an existing checkout that still has the old CSV/parquet/JSON files? Run
+`python -m scripts.migrate_to_sqlite` once to import them into `data/pricing.db` without
+re-running (and re-paying for) the geocode/distance API steps. The original files are left as-is.
 
 ## How the price model works
 

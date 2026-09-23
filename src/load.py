@@ -5,8 +5,9 @@ position because the header repeats (วันที่ขึ้นสินค�
 """
 import pandas as pd
 
+from . import db
 from .files import DataFileError
-from .paths import ROOT, SOURCE_FILES, TRIPS_RAW
+from .paths import ROOT, SOURCE_FILES
 
 # Column A..AP, in order.
 COLUMNS = [
@@ -100,8 +101,8 @@ def load_all() -> pd.DataFrame:
 
 def main():
     df = load_all()
-    df.to_parquet(TRIPS_RAW, index=False)
-    print(f"[load] {len(df):,} rows from {len(SOURCE_FILES)} files -> {TRIPS_RAW.name}")
+    db.replace_table(df, "trips_raw")
+    print(f"[load] {len(df):,} rows from {len(SOURCE_FILES)} files -> trips_raw table")
     print(df.groupby("source_file").size().to_string())
     return df
 

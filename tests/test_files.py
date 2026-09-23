@@ -1,25 +1,7 @@
 import pandas as pd
 import pytest
 
-from src.files import DataFileError, read_csv, read_json, require_columns, write_json
-
-
-def test_json_roundtrip_leaves_no_temp_file(tmp_path):
-    p = tmp_path / "cache.json"
-    write_json(p, {"a|b": {"km": 12.5}}, indent=0)
-    assert read_json(p) == {"a|b": {"km": 12.5}}
-    assert list(tmp_path.iterdir()) == [p]
-
-
-def test_missing_json_is_empty_cache(tmp_path):
-    assert read_json(tmp_path / "nope.json") == {}
-
-
-def test_corrupt_json_is_an_error_not_an_empty_cache(tmp_path):
-    p = tmp_path / "cache.json"
-    p.write_text('{"a": {"km": 1', encoding="utf-8")   # a run killed mid-write, old style
-    with pytest.raises(DataFileError, match="corrupt"):
-        read_json(p)
+from src.files import DataFileError, read_csv, require_columns
 
 
 def test_csv_saved_as_ansi_by_excel(tmp_path):
