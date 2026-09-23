@@ -330,6 +330,36 @@ def price_stats(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("trips", ascending=False).reset_index()
 
 
+def cutoff_price_stats(values: np.ndarray) -> dict:
+    """Plain mean, a 3-sigma-trimmed mean, and a modified-Z-trimmed mean, each with its own N.
+
+    3-sigma: drop |x - mean| > 3*std, recompute mean over survivors.
+    Modified Z (Iglewicz & Hoaglin): drop |0.6745*(x-median)/MAD| > 3.5, recompute mean.
+    Falls back to the plain mean/N when there are too few points, or no spread, to trim.
+    """
+    n = len(values)
+    avg = float(np.mean(values)) if n else np.nan
+    out = {"avg": avg, "n": n, "avg_3sigma": avg, "n_3sigma": n, "avg_modiz": avg, "n_modiz": n}
+    if n < 2:
+        return out
+
+    std = np.std(values)
+    if std > 0:
+        keep = np.abs(values - np.mean(values)) <= 3 * std
+        if keep.any():
+            out["avg_3sigma"], out["n_3sigma"] = float(values[keep].mean()), int(keep.sum())
+
+    med = np.median(values)
+    mad = np.median(np.abs(values - med))
+    if mad > 0:
+        modified_z = 0.6745 * (values - med) / mad
+        keep = np.abs(modified_z) <= 3.5
+        if keep.any():
+            out["avg_modiz"], out["n_modiz"] = float(values[keep].mean()), int(keep.sum())
+
+    return out
+
+
 def with_total(df: pd.DataFrame, sum_cols: list[str], label_col: str) -> pd.DataFrame:
     """Append a TOTAL row: sums for sum_cols, 'TOTAL (n trips)' in label_col, other cells empty."""
     if df.empty:
@@ -537,8 +567,120 @@ with st.sidebar:
 
 
 st.title("Transport price lookup")
-tab_route, tab_km, tab_summary, tab_fuel = st.tabs(
-    ["By origin → destination", "By km", "Price variability", "Fuel rate"])
+tab_dashboard, tab_route, tab_km, tab_summary, tab_fuel = st.tabs(
+    ["Dashboard", "By origin → destination", "By km", "Price variability", "Fuel rate"])
+
+# ---------- tab 0: dashboard ----------
+
+with tab_dashboard:
+    st.info(
+        "**Note:** Origin and Destination must be a real, geocodable address - ideally a Google Maps "
+        "link or a place already saved in the location list. Estimated total km comes from the Google "
+        "Maps Routes API and excludes live traffic conditions (same convention used everywhere else in "
+        "this app). Use the map links below to check a point or a route before trusting its price."
+    )
+    st.caption("Car Type / Ori / Dest are the real combinations billed to date. Each Avg.Price is a "
+               "different way of averaging the billed price - a plain mean, a 3-sigma-trimmed mean, "
+               "and a modified-Z-trimmed mean - each recomputed after dropping its own outliers. "
+               "N is the trip count that mean is based on.")
+
+    def stats_row(values: np.ndarray) -> dict:
+        s = cutoff_price_stats(values)
+        return {"Avg.Price (before cut-off)": s["avg"], "N (before cut-off)": s["n"],
+                "Avg.Price (3-sigma, after cut-off)": s["avg_3sigma"], "N (3-sigma, after cut-off)": s["n_3sigma"],
+                "Avg.Price (modi-Z, after cut-off)": s["avg_modiz"], "N (modi-Z, after cut-off)": s["n_modiz"]}
+
+    def dash_column_config(price_help: str, decimals: int = 0) -> dict:
+        price_cols = ["Avg.Price (before cut-off)", "Avg.Price (3-sigma, after cut-off)",
+                      "Avg.Price (modi-Z, after cut-off)"]
+        n_cols = ["N (before cut-off)", "N (3-sigma, after cut-off)", "N (modi-Z, after cut-off)"]
+        cfg = {label: NumCol(label, help=price_help, format=f"%,.{decimals}f") for label in price_cols}
+        cfg.update({label: NumCol(label, help="Trips that mean is based on.", format="%d") for label in n_cols})
+        return cfg
+
+    def maps_route_url(o_latlon: str, d_latlon: str) -> str | None:
+        """o_latlon/d_latlon are 'lat, lon' (from the geocode cache) or '' if never geocoded."""
+        if not o_latlon or not d_latlon:
+            return None
+        o_lat, o_lon = (x.strip() for x in o_latlon.split(","))
+        d_lat, d_lon = (x.strip() for x in d_latlon.split(","))
+        return (f"https://www.google.com/maps/dir/?api=1&origin={o_lat},{o_lon}"
+                f"&destination={d_lat},{d_lon}&travelmode=driving")
+
+    OTHER_CFG = {
+        "Gas Price Range": TxtCol(
+            "Gas Price Range",
+            help="Median fuel-rate band (THB/litre) billed on this route - partial coverage, blank "
+                 "where no trip on this route/class carries a fuel clause."),
+        "Existing pair price (min-max)": TxtCol(
+            "Existing pair price (min-max)",
+            help="Min-max range actually billed on this route. The alternative calculation method - "
+                 "estimated km (from the geocoded addresses) x model-estimated price/km, for a car "
+                 "type / route with no billed history yet - is not wired up here."),
+    }
+    MAP_CFG = {
+        "Route Map": st.column_config.LinkColumn(
+            "Route Map", help="Open the full driving route (origin → destination) on Google Maps.",
+            display_text="🛣️ Open"),
+        "Total KM": NumCol("Total KM", help="Estimated road distance (median across trips on this route, "
+                                            "Google Routes API, excludes live traffic).", format="%,.0f"),
+    }
+
+    priced = trips[trips["vehicle_class"].notna() & (trips["origin_c"] != "") & (trips["dest_c"] != "")
+                   & (trips["price"] > 0)]
+    route_rows = pd.DataFrame([
+        {"Car Type": vc, "Ori": o, "Dest": d,
+         "Total KM": g["total_km"][g["total_km"] > 0].median(),
+         "Route Map": maps_route_url(g["origin_latlon"].iloc[0], g["dest_latlon"].iloc[0]),
+         **stats_row(g["price"].to_numpy()),
+         "Existing pair price (min-max)": f"{g['price'].min():,.0f}-{g['price'].max():,.0f}",
+         "Gas Price Range": (f"{g['fuel_rate_low'].median():.2f}-{g['fuel_rate_high'].median():.2f}"
+                             if g["fuel_rate_low"].notna().any() and g["fuel_rate_high"].notna().any() else None)}
+        for (vc, o, d), g in priced.groupby(["vehicle_class", "origin_c", "dest_c"])
+    ]).sort_values(["Car Type", "Ori", "N (before cut-off)"], ascending=[True, True, False]).reset_index(drop=True)
+
+    def diverging_mask(df: pd.DataFrame, tol: float = 0.005) -> pd.Series:
+        """True where a cut-off mean moved >tol (relative) from the before-cut-off mean - i.e. that
+        route actually had outliers trimmed, as opposed to a flat/too-small-to-trim group."""
+        before = df["Avg.Price (before cut-off)"]
+        moved = pd.Series(False, index=df.index)
+        for col in ["Avg.Price (3-sigma, after cut-off)", "Avg.Price (modi-Z, after cut-off)"]:
+            moved |= (df[col] - before).abs() > tol * before.abs().clip(lower=1)
+        return moved
+
+    def highlight_diverging(df: pd.DataFrame):
+        moved = diverging_mask(df)
+        return df.style.apply(lambda row: ["background-color: #fff3b0" if moved.loc[row.name] else ""] * len(row),
+                               axis=1)
+
+    f1, f2 = st.columns(2)
+    diverge_only = f1.checkbox("Show only diverging rows (cut-off actually trimmed something)")
+    fuel_only = f2.checkbox("Only routes with fuel-range data")
+    if diverge_only:
+        route_rows = route_rows[diverging_mask(route_rows)].reset_index(drop=True)
+    if fuel_only:
+        route_rows = route_rows[route_rows["Gas Price Range"].notna()].reset_index(drop=True)
+
+    dup_car = route_rows["Car Type"] == route_rows["Car Type"].shift()
+    dup_ori = dup_car & (route_rows["Ori"] == route_rows["Ori"].shift())
+    route_rows.loc[dup_ori, "Ori"] = ""
+    route_rows.loc[dup_car, "Car Type"] = ""
+
+    st.caption(f"{len(route_rows):,} routes shown. 🟡 Highlighted rows are where a cut-off method actually "
+               "trimmed something - its mean moved from the before-cut-off mean by more than 0.5%.")
+    st.dataframe(highlight_diverging(route_rows), hide_index=True, width="stretch",
+                 column_config={**dash_column_config("THB per trip, after each method's outlier cutoff."),
+                                **OTHER_CFG, **MAP_CFG})
+
+    st.subheader("Per KM")
+    per_km_src = trips[trips["vehicle_class"].notna() & (trips["price"] > 0) & (trips["total_km"] > 0)].copy()
+    per_km_src["price_per_km"] = per_km_src["price"] / per_km_src["total_km"]
+    per_km_rows = pd.DataFrame([
+        {"Car Type": vc, **stats_row(g["price_per_km"].to_numpy())}
+        for vc, g in per_km_src.groupby("vehicle_class")
+    ]).sort_values("Car Type").reset_index(drop=True)
+    st.dataframe(per_km_rows, hide_index=True, width="stretch",
+                 column_config=dash_column_config("THB per km, after each method's outlier cutoff.", decimals=2))
 
 # ---------- tab 1: origin -> destination ----------
 
