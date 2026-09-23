@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8501:8501"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - C:/Users/tob/.cloudflared/62dff2ec-486f-42a3-b5ca-b7e163379489.json:/etc/cloudflared/62dff2ec-486f-42a3-b5ca-b7e163379489.json:ro
+    depends_on:
+      - app

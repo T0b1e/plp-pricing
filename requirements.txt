@@ -1,0 +1,9 @@
+pandas
+numpy
+openpyxl
+pyarrow
+requests
+python-dotenv
+rapidfuzz
+pytest
+streamlit

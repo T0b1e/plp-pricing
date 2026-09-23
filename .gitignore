@@ -1,0 +1,15 @@
+.env
+venv/
+__pycache__/
+.pytest_cache/
+~$*
+
+# raw pipeline inputs and outputs not read by app.py (large, regenerable via main.py)
+Report AR_AP_*.xlsx
+data/trips_raw.parquet
+data/trip_table.csv
+data/trip_table.xlsx
+data/*.log
+
+cloudflared/creds.json
+

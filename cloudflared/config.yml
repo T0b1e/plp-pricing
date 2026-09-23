@@ -1,0 +1,7 @@
+tunnel: 62dff2ec-486f-42a3-b5ca-b7e163379489
+credentials-file: /etc/cloudflared/62dff2ec-486f-42a3-b5ca-b7e163379489.json
+
+ingress:
+  - hostname: plp-pricing.narongkorn.com
+    service: http://app:8501
+  - service: http_status:404

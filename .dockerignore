@@ -1,0 +1,11 @@
+.git
+.gitignore
+venv/
+__pycache__/
+.pytest_cache/
+tests/
+data/
+*.xlsx
+~$*
+.env
+README.md
