@@ -6,13 +6,13 @@ for multi-stop trips), and every result is cached by coordinates.
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import pandas as pd
 
 from . import google_api as g
-from . import db
 from .aliases import canonical_map
-from .files import read_csv
+from .files import read_csv, read_json, write_csv, write_json
 from .parse_route import fuel_bracket
-from .paths import LOCATIONS
+from .paths import DISTANCE_CACHE, LOCATIONS, TRIPS_CLEAN, TRIPS_PARSED
 
 WORKERS = 8
 MAX_KM = 1500   # longest plausible domestic run
@@ -33,11 +33,11 @@ def point_key(lat, lon) -> str:
 
 
 def load_cache() -> dict:
-    return db.load_distance_cache()
+    return read_json(DISTANCE_CACHE)
 
 
 def save_cache(cache: dict):
-    db.save_distance_cache(cache)
+    write_json(DISTANCE_CACHE, cache, indent=0)
 
 
 def fetch(pair_key: str) -> tuple[str, dict]:
@@ -60,7 +60,7 @@ def fetch(pair_key: str) -> tuple[str, dict]:
 
 
 def main():
-    trips = db.read_table("trips_parsed", json_cols=["stops", "conditions", "non_place"])
+    trips = pd.read_parquet(TRIPS_PARSED)
     loc = read_csv(LOCATIONS, dtype=str).fillna("")
     canon = canonical_map()
     coords, bad_coords = {}, []
@@ -158,7 +158,7 @@ def main():
                 "conditions", "non_place", "origin_lat", "origin_lon", "dest_lat", "dest_lon",
                 "total_km", "direct_km", "km_source", "fuel_rate_bracket", "fuel_rate_low",
                 "fuel_rate_high", "price", "contractor_cost", "driver_cost"]
-    db.replace_table(trips[out_cols], "trips_clean")
+    write_csv(trips[out_cols], TRIPS_CLEAN, index=False)
 
     routable = trips["stop_count"] >= 2
     ok = trips["total_km"].notna()
@@ -168,7 +168,7 @@ def main():
           f"missing (ungeocoded stop or failed leg): {(routable & ~ok).sum():,}")
     print(f"           failed legs: {len(failed) - len(fallback_used)}; implausible km (>{MAX_KM}): {bad.sum()}")
     print("           km source: " + trips.loc[ok, "km_source"].value_counts().to_dict().__repr__())
-    print("           -> trips_clean table")
+    print(f"           -> {TRIPS_CLEAN.name}")
 
 
 if __name__ == "__main__":

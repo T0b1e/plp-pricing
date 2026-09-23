@@ -13,9 +13,8 @@ from collections import Counter
 
 import pandas as pd
 
-from . import db
 from .files import read_csv, write_csv
-from .paths import LOCATIONS
+from .paths import LOCATIONS, TRIPS_PARSED, TRIPS_RAW
 
 FUEL_PREFIX = re.compile(r"(?:อัตรา|เรท)?\s*น้ำมัน\s*\(([^()]*)\)")
 # "(<30)", "(30.01-33)", "(28-30.99)", "(<35)", "(>40)"
@@ -186,7 +185,7 @@ def parse_route(raw: str) -> dict:
 
 
 def main():
-    df = db.read_table("trips_raw")
+    df = pd.read_parquet(TRIPS_RAW)
     parsed = df["route_raw"].map(parse_route)
     df["stops"] = parsed.map(lambda p: p["stops"])
     df["conditions"] = parsed.map(lambda p: p["conditions"])
@@ -194,7 +193,7 @@ def main():
     df["stop_count"] = df["stops"].map(len)
     df["origin"] = df["stops"].map(lambda x: x[0] if x else None)
     df["destination"] = df["stops"].map(lambda x: x[-1] if x else None)
-    db.replace_table(df, "trips_parsed", json_cols=["stops", "conditions", "non_place"])
+    df.to_parquet(TRIPS_PARSED, index=False)
 
     freq = Counter(t for stops in df["stops"] for t in stops)
     loc = pd.DataFrame(sorted(freq.items(), key=lambda kv: -kv[1]), columns=["token", "frequency"])

@@ -12,9 +12,8 @@ from decimal import Decimal, InvalidOperation
 import openpyxl
 import pandas as pd
 
-from . import db
 from .files import DataFileError, write_csv
-from .paths import DATA, SOURCE_FILES
+from .paths import DATA, SOURCE_FILES, TRIPS_CLEAN, TRIPS_PARSED, TRIPS_RAW
 from .vehicles import vehicle_class
 
 CHECKSUM = DATA / "checksum.csv"
@@ -81,12 +80,12 @@ def main():
     src.index.name = "source_file"
 
     stages = {"xlsx": src}
-    for name in ["trips_raw", "trips_parsed", "trips_clean"]:
-        if not db.table_exists(name):
+    for name, path in [("trips_raw", TRIPS_RAW), ("trips_parsed", TRIPS_PARSED), ("trips_clean", TRIPS_CLEAN)]:
+        if not path.exists():
             print(f"  (stage {name} not built yet - skipped)")
             continue
-        df = db.read_table(name)
-        df["job_order_no"] = df["job_order_no"].astype(str)
+        df = pd.read_parquet(path) if path.suffix == ".parquet" else \
+            pd.read_csv(path, encoding="utf-8-sig", dtype={"job_order_no": str})
         stages[name] = stage_totals(df)
     from .export import COLUMNS, TRIP_CSV
     if TRIP_CSV.exists():   # trip table has Thai headers and no contractor cost; map back and compare rows + price
@@ -130,8 +129,8 @@ def main():
         print("\n!! MISMATCHES:\n" + bad.to_string(index=False))
 
     # where the rows go between trips_clean and the model
-    if db.table_exists("trips_clean"):
-        df = db.read_table("trips_clean")
+    if TRIPS_CLEAN.exists():
+        df = pd.read_csv(TRIPS_CLEAN, encoding="utf-8-sig")
         df["reason"] = exclusion_reason(df)
         ex = (df.groupby("reason").agg(rows=("price", "size"), price_sum=("price", "sum"))
               .sort_values("rows", ascending=False))

@@ -9,8 +9,8 @@ line. Also writes a distance-band table of medians as a model-free cross-check.
 import numpy as np
 import pandas as pd
 
-from . import db
-from .files import DataFileError, require_columns
+from .files import DataFileError, read_csv, require_columns, write_csv
+from .paths import MODEL_SUMMARY, RATE_TABLE, TRIPS_CLEAN
 from .robust import mad_scale
 from .vehicles import vehicle_class, wheels
 
@@ -26,8 +26,8 @@ BORROWED = "Borrowed – few trips"    # < MIN_N trips: the all-truck line, scal
 
 
 def load_training() -> pd.DataFrame:
-    df = db.read_table("trips_clean")
-    require_columns(df, ["vehicle_type", "total_km", "price", "stop_count", "status"], "trips_clean")
+    df = read_csv(TRIPS_CLEAN)
+    require_columns(df, ["vehicle_type", "total_km", "price", "stop_count", "status"], TRIPS_CLEAN.name)
     df["vehicle_class"] = df["vehicle_type"].fillna("").map(vehicle_class)
     # CONFIRM = sent for billing, actually completed; OPEN/POSTED jobs may never have shipped
     # and would otherwise pollute the price curve as outliers.
@@ -117,7 +117,7 @@ def main():
         s.at[i, "km_min"], s.at[i, "km_max"] = g["total_km"].min(), g["total_km"].max()
         s.at[i, "n_used"] = len(g)
 
-    db.replace_table(s, "model_summary")
+    write_csv(s, MODEL_SUMMARY, index=False)
 
     def band_stats(d: pd.DataFrame) -> pd.DataFrame:
         return (d.assign(baht_per_km=d["price"] / d["total_km"])
@@ -135,14 +135,14 @@ def main():
     bands = pd.concat([all_bands, per_class_bands], ignore_index=True)
     bands = bands.merge(s[["vehicle_class", "method", "base_fare", "rate_per_km", "drop_fee", "r2"]],
                         on="vehicle_class", how="left")
-    db.replace_table(bands, "rate_table")
+    write_csv(bands, RATE_TABLE, index=False)
 
     report(df, s)
 
 
 def report(df, s):
     pd.set_option("display.width", 200)
-    all_rows = db.read_table("trips_clean")[["price", "status"]]
+    all_rows = read_csv(TRIPS_CLEAN, usecols=["price", "status"])
     total = len(all_rows)
     status_counts = all_rows["status"].value_counts().to_dict()
     print(f"[model] trained on {len(df):,} of {total:,} rows "
@@ -171,7 +171,7 @@ def report(df, s):
         mono = k["rate_per_km"].is_monotonic_increasing
         order = " < ".join(f"{r.vehicle_class} {r.rate_per_km:.1f}" for r in k.itertuples())
         print(f"{'ok' if mono else '!!'} {kind} baht/km by size: {order}")
-    print("\n-> rate_table, model_summary tables")
+    print(f"\n-> {RATE_TABLE.name}, {MODEL_SUMMARY.name}")
 
 
 if __name__ == "__main__":

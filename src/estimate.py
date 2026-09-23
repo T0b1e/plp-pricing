@@ -11,9 +11,9 @@ import sys
 
 from rapidfuzz import fuzz, process
 
-from . import db
-from .files import DataFileError
+from .files import DataFileError, read_csv
 from .fit_model import ALL, BAND_LABELS, BANDS, OWN, predict
+from .paths import MODEL_SUMMARY, RATE_TABLE
 
 
 class UnknownVehicle(ValueError):
@@ -21,9 +21,9 @@ class UnknownVehicle(ValueError):
 
 
 def load():
-    if not (db.table_exists("model_summary") and db.table_exists("rate_table")):
+    if not (MODEL_SUMMARY.exists() and RATE_TABLE.exists()):
         raise DataFileError("No model yet - run `python main.py` first.")
-    return db.read_table("model_summary"), db.read_table("rate_table")
+    return read_csv(MODEL_SUMMARY), read_csv(RATE_TABLE)
 
 
 def match_vehicle(query: str, classes: list[str]) -> str | None:

@@ -13,12 +13,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src import db, distance, google_api
+from src import distance, google_api
 from src.aliases import canonical_map
 from src.estimate import estimate
 from src.files import DataFileError, read_csv, require_columns
 from src.fit_model import ALL
-from src.paths import EPPO_DIESEL, LOCATIONS
+from src.paths import EPPO_DIESEL, LOCATIONS, MODEL_SUMMARY, RATE_TABLE, TRIPS_CLEAN, TRIPS_PARSED
 from src.robust import mad_outlier_mask
 from src.vehicles import vehicle_class
 
@@ -243,9 +243,9 @@ MODEL_CFG = {   # model_table(): one row per vehicle class
 @st.cache_resource(show_spinner="Loading trips…")
 def load_trips() -> tuple[pd.DataFrame, str | None]:
     """Trips plus a warning if road km could not be attached (the rest still works without it)."""
-    if not db.table_exists("trips_parsed"):
-        raise DataFileError("trips_parsed table not found - run `python main.py --to parse` first.")
-    t = db.read_table("trips_parsed", json_cols=["stops", "conditions", "non_place"])
+    if not TRIPS_PARSED.exists():
+        raise DataFileError(f"{TRIPS_PARSED.name} not found - run `python main.py --to parse` first.")
+    t = pd.read_parquet(TRIPS_PARSED)
     canon = canonical_map()
     t = t[t["stop_count"] >= 2].copy()
     t["origin_c"] = t["origin"].map(lambda s: canon.get(s, s))
@@ -275,15 +275,14 @@ def load_trips() -> tuple[pd.DataFrame, str | None]:
     for c in fuel_cols:
         t[c] = np.nan
     warning = None
-    if db.table_exists("trips_clean"):
+    if TRIPS_CLEAN.exists():
         try:
             extra_cols = ["job_order_no", "total_km", *fuel_cols]
-            extra = db.read_table("trips_clean")[extra_cols]
-            extra["job_order_no"] = extra["job_order_no"].astype(str)
+            extra = read_csv(TRIPS_CLEAN, usecols=extra_cols, dtype={"job_order_no": str})
             t = t.drop(columns=["total_km", *fuel_cols]) \
                  .merge(extra.drop_duplicates("job_order_no"), on="job_order_no", how="left")
         except Exception as e:   # e.g. the pipeline is rewriting it right now
-            warning = f"Road km per trip not loaded (trips_clean table: {e}). Press Reload data to retry."
+            warning = f"Road km per trip not loaded ({TRIPS_CLEAN.name}: {e}). Press Reload data to retry."
     return t, warning
 
 
@@ -312,9 +311,9 @@ def load_locations() -> pd.DataFrame:
 
 @st.cache_data(show_spinner="Loading price model…")
 def load_model():
-    if not (db.table_exists("model_summary") and db.table_exists("rate_table")):
+    if not (MODEL_SUMMARY.exists() and RATE_TABLE.exists()):
         return None, None
-    return db.read_table("model_summary"), db.read_table("rate_table")
+    return read_csv(MODEL_SUMMARY), read_csv(RATE_TABLE)
 
 
 def reload_button():
@@ -553,7 +552,7 @@ def road_km(origin: str, dest: str) -> tuple[float | None, str]:
     except ValueError:
         return None, "lat/lon in locations_master.csv is not a number for one of these places"
     try:
-        cache = db.load_distance_cache()
+        cache = distance.load_cache()
     except DataFileError as e:
         return None, str(e)
     if cache.get(key, {}).get("km") is not None:
@@ -570,23 +569,24 @@ def road_km(origin: str, dest: str) -> tuple[float | None, str]:
         return None, "no GOOGLE_MAPS_API_KEY in .env on the machine running this page"
     if v.get("km") is None:   # not cached: a failed lookup should be retryable
         return None, f"Routes API: {v.get('error', 'no route')}"
+    cache[k] = v
     try:
-        db.upsert_distance(k, v)   # writes only this key - safe with other users clicking at the same time
+        distance.save_cache(cache)
     except Exception as e:   # the km is still good for this page view
         st.toast(f"Road km not saved to the cache: {e}")
     return v["km"], "Google Routes API"
 
 
 def need_model():
-    """Shown wherever a model estimate is requested but the model_summary table hasn't been built yet."""
-    st.info("The price model is not built yet (no `model_summary` table). Finish geocoding, "
+    """Shown wherever a model estimate is requested but data/model_summary.csv hasn't been built yet."""
+    st.info("The price model is not built yet (no `data/model_summary.csv`). Finish geocoding, "
             "then run `python main.py --from distance`. Historical prices by route still work.")
 
 
 def model_failed(e: Exception):
-    """Shown wherever estimate()/model_table() raises - usually a stale or malformed model table."""
+    """Shown wherever estimate()/model_table() raises - usually a stale or malformed model file."""
     st.error(f"Model estimate failed: {type(e).__name__}: {e}")
-    st.caption("The `model_summary` table may be from an older pipeline version - rerun "
+    st.caption("`data/model_summary.csv` may be from an older pipeline version - rerun "
                "`python main.py --from model`, then Reload data.")
 
 

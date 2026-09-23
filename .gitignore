@@ -11,10 +11,9 @@ data/trip_table.csv
 data/trip_table.xlsx
 data/*.log
 
-# SQLite WAL sidecar files - transient, not meant to be committed
-data/pricing.db-wal
-data/pricing.db-shm
-
 cloudflared/creds.json
 
+# sqlite-backed pipeline lives on the sqlite-db branch, not master
 data/pricing.db
+data/pricing.db-wal
+data/pricing.db-shm

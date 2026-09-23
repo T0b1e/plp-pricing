@@ -1,4 +1,4 @@
-"""Pull HSD B7 diesel retail prices from EPPO's open-data API into the eppo_diesel table.
+"""Pull HSD B7 diesel retail prices from EPPO's open-data API into data/eppo_diesel_hsd_b7.json.
 
 Uses the "domestic and international oil prices" resource, which carries a
 real Year + Month + Date(day) field (Thailand HSD B7 is reported roughly
@@ -14,7 +14,7 @@ Run it yourself, e.g.:
     python -m scripts.fetch_eppo_diesel --start-year 2015 --sleep 2
     python -m scripts.fetch_eppo_diesel --force   # refetch years already saved
 
-Safe to interrupt: each year is upserted into data/pricing.db as soon as it's
+Safe to interrupt: each year is saved to data/eppo_diesel_hsd_b7.json as soon as it's
 fetched, so progress is never lost and a rerun only re-fetches missing years.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from src import db
+from src.paths import EPPO_DIESEL
 
 API_BASE = "https://catalog.eppo.go.th/api/3/action/datastore_search"
 RESOURCE_ID = "7d56918d-adbf-42b7-bd36-e4b33d425027"
@@ -87,6 +87,16 @@ def year_is_fetched(data: dict, year: int) -> bool:
     return any(v["year"] == year for v in data.values())
 
 
+def load_data() -> dict:
+    if not EPPO_DIESEL.exists():
+        return {}
+    return json.loads(EPPO_DIESEL.read_text(encoding="utf-8"))
+
+
+def save_data(data: dict):
+    EPPO_DIESEL.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--start-year", type=int, default=2012)
@@ -95,8 +105,8 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="refetch years already saved")
     args = parser.parse_args()
 
-    data = db.load_eppo_diesel()
-    print(f"Loaded {len(data)} existing day records from {db.DB_PATH.name}")
+    data = load_data()
+    print(f"Loaded {len(data)} existing day records from {EPPO_DIESEL.name}")
 
     years = range(args.start_year, args.end_year + 1)
     for year in years:
@@ -113,12 +123,12 @@ def main() -> None:
 
         days = records_to_days(records)
         data.update(days)
-        db.save_eppo_diesel(days)
+        save_data(data)
         print(f"{year}: saved {len(days)} day(s), {len(data)} total")
 
         time.sleep(args.sleep)
 
-    print(f"Done. {len(data)} day records in {db.DB_PATH}")
+    print(f"Done. {len(data)} day records in {EPPO_DIESEL}")
 
 
 if __name__ == "__main__":
