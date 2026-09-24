@@ -170,11 +170,11 @@ def highlight_diverging(df: pd.DataFrame, margin: float | None = None):
     def _row(row):
         if str(row["Car Type"]).startswith("SUMMARY"):
             return [""] * len(row)
-        styles = ["background-color: #fff3b0" if moved.loc[row.name] else "" for _ in row.index]
+        styles = ["background-color: rgba(255, 193, 7, 0.25)" if moved.loc[row.name] else "" for _ in row.index]
         if gas_col in row.index:
             pct = gas_pct.loc[row.name]
             if pd.notna(pct) and abs(pct) > pct_tol:
-                color = "#ffadad" if pct > 0 else "#b9f6ca"  # red = billed above EPPO, green = below
+                color = "rgba(255, 82, 82, 0.40)" if pct > 0 else "rgba(0, 200, 83, 0.35)"  # red = billed above EPPO, green = below
                 styles[row.index.get_loc(gas_col)] = f"background-color: {color}"
         return styles
     return df.style.apply(_row, axis=1)
