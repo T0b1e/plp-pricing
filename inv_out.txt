@@ -1,0 +1,67 @@
+bill_no 2607000163 -> destination containing 'DC Makro Mahachai': 20 rows
+job_order_no origin       destination  total_km  price
+INV260629064    TUF DC Makro Mahachai    20.612 2016.0
+INV260627052    TUF DC Makro Mahachai    20.612 2016.0
+INV260627050    TUF DC Makro Mahachai    20.612 2016.0
+INV260626064    TUF DC Makro Mahachai    20.612 2016.0
+INV260625064    TUF DC Makro Mahachai    20.612 2016.0
+INV260625065    TUF DC Makro Mahachai    20.612 2016.0
+INV260624063    TUF DC Makro Mahachai    20.612 5376.0
+INV260623066    TUF DC Makro Mahachai    20.612 5376.0
+INV260622071    TUF DC Makro Mahachai    20.612 2016.0
+INV260622072    TUF DC Makro Mahachai    20.612 2016.0
+INV260620101    TUF DC Makro Mahachai    20.612 5376.0
+INV260619068    TUF DC Makro Mahachai    20.612 2016.0
+INV260618074    TUF DC Makro Mahachai    20.612 2016.0
+INV260618076    TUF DC Makro Mahachai    20.612 2016.0
+INV260617069    TUF DC Makro Mahachai    20.612 2016.0
+INV260617070    TUF DC Makro Mahachai    20.612 2016.0
+INV260616083    TUF DC Makro Mahachai    20.612 2016.0
+INV260616084    TUF DC Makro Mahachai    20.612 2016.0
+INV260615047    TUF DC Makro Mahachai    20.612 2016.0
+INV260615048    TUF DC Makro Mahachai    20.612 2016.0
+
+bill_no 2607000152 -> destination containing 'DC Makro Mahachai': 34 rows
+job_order_no      origin                      destination  total_km  price
+INV260629079     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260627064     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260627065     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260626066     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260625068     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260625081     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260724078     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260724079     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260723057     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260723058     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260723059     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260723060     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260722087 TUF โรงกุ้ง DC Makro Mahachai (แมคโครมหาชัย)    21.444 1639.0
+INV260722088 TUF โรงกุ้ง DC Makro Mahachai (แมคโครมหาชัย)    21.444 1639.0
+INV260721047     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260720060 TUF โรงกุ้ง DC Makro Mahachai (แมคโครมหาชัย)    21.444 1639.0
+INV260720061 TUF โรงกุ้ง DC Makro Mahachai (แมคโครมหาชัย)    21.444 1639.0
+INV260718066 TUF โรงกุ้ง                DC Makro Mahachai    21.450 5628.0
+INV260718053     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260717039     OKF/TUF                DC Makro Mahachai    20.628 1639.0
+INV260714082     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260714083     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260713058     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260711101     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260711102     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260709085     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260708050     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260707058     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260706084     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260704062     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260703075     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260702076     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260701086     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+INV260630133     OKF/TUF                DC Makro Mahachai    20.628 1688.0
+
+bill_no 2605000215 -> destination containing 'โซนสมุทรสาคร': 4 rows
+job_order_no             origin  destination  total_km  price
+INV260505014 UKF (สยาม ยูเคเอฟ) โซนสมุทรสาคร     1.747 1500.0
+INV260505015 UKF (สยาม ยูเคเอฟ) โซนสมุทรสาคร     1.747 1500.0
+INV260423105 UKF (สยาม ยูเคเอฟ) โซนสมุทรสาคร     1.747 1500.0
+INV260505013 UKF (สยาม ยูเคเอฟ) โซนสมุทรสาคร     1.747 1500.0
+

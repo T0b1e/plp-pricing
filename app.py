@@ -741,8 +741,18 @@ with tab_dashboard:
                                             "Google Routes API, excludes live traffic).", format="%,.0f"),
     }
 
+    # Known bad data: bill_no 2607000163 (TUF -> "DC Makro Mahachai") has origin/destination
+    # geocoded to the wrong "DC Makro Mahachai" candidate (a retail mall ~1km from origin,
+    # instead of the actual distribution center ~10km+ away - see geocode_cache.json, which lists
+    # both candidates). total_km for that leg is computed as ~1.05km against a real billed price
+    # of 2016-5376 THB, producing 1900-5100 THB/km outlier ratios that this bill repeats 30+ times
+    # (recurring contract), dominating the untrimmed 4W/6W reefer per-km averages below. The raw
+    # rows are kept in trips_clean.csv untouched; they are only excluded here from the price/km
+    # stats until the geocode is corrected at the source.
+    BAD_GEOCODE_BILL_NOS = {"2607000163"}
+
     priced = trips[trips["vehicle_class"].notna() & (trips["origin_c"] != "") & (trips["dest_c"] != "")
-                   & (trips["price"] > 0)]
+                   & (trips["price"] > 0) & ~trips["bill_no"].astype(str).isin(BAD_GEOCODE_BILL_NOS)]
     if dash_vehicle:
         priced = priced[priced["vehicle_class"].isin(dash_vehicle)]
     if dash_customer:
@@ -774,13 +784,17 @@ with tab_dashboard:
     else:
         route_rows = pd.DataFrame(route_row_list)
 
-    def diverging_mask(df: pd.DataFrame, tol: float = 0.005) -> pd.Series:
-        """True where a cut-off mean moved >tol (relative) from the before-cut-off mean - i.e. that
-        route actually had outliers trimmed, as opposed to a flat/too-small-to-trim group."""
+    def diverging_mask(df: pd.DataFrame, tol: float = 0.005, margin: float | None = None) -> pd.Series:
+        """True where a cut-off mean moved away from the before-cut-off mean by more than either a
+        relative tolerance (tol, default 0.5%) or an absolute margin (e.g. 20 THB/km) - i.e. that
+        row actually had outliers trimmed, as opposed to a flat/too-small-to-trim group. `margin` suits
+        per-km THB values better than a relative %, since a THB/km gap is meaningful at a fixed size
+        regardless of whether the average itself is small or large."""
         before = df["Avg.Price (before cut-off)"]
+        threshold = margin if margin is not None else tol * before.abs().clip(lower=1)
         moved = pd.Series(False, index=df.index)
         for col in ["Avg.Price (3-sigma, after cut-off)", "Avg.Price (modi-Z, after cut-off)"]:
-            moved |= (df[col] - before).abs() > tol * before.abs().clip(lower=1)
+            moved |= (df[col] - before).abs() > threshold
         return moved
 
     def with_summary_row(df: pd.DataFrame) -> pd.DataFrame:
@@ -803,8 +817,8 @@ with tab_dashboard:
         return (df["Gas Price Divergence"].fillna("")
                 .str.extract(r"\(([+-]?[\d.]+)%\)", expand=False).astype(float))
 
-    def highlight_diverging(df: pd.DataFrame):
-        moved = diverging_mask(df)
+    def highlight_diverging(df: pd.DataFrame, margin: float | None = None):
+        moved = diverging_mask(df, margin=margin)
         gas_pct = gas_divergence_pct(df)
         gas_col = "Gas Price Divergence"
         pct_tol = 5.0
@@ -846,6 +860,48 @@ with tab_dashboard:
                      column_config={**dash_column_config("THB per trip, after each method's outlier cutoff."),
                                     **OTHER_CFG, **MAP_CFG})
 
+    st.subheader("Fitted price model (base fare + rate/km)")
+    st.caption("From `data/model_summary.csv`: price = base_fare + rate_per_km × km + drop_fee × extra "
+               "stops, fit per vehicle class on CONFIRM trips (trimmed least squares, so a few odd bills "
+               "don't bend the line). **rate_per_km is the real marginal cost per km** - unlike the flat "
+               "'price ÷ km' averages below, it isn't distorted by mixing short and long trips (a fixed "
+               "base fare divided by a small vs. large distance gives wildly different ratios even at a "
+               "constant rate_per_km).")
+    st.info("⚠️ **Check R² before trusting a row.** It shows how much of the price this class's fit "
+            "actually explains - low R² means lots of scatter the model doesn't capture, so treat its "
+            "rate_per_km as rough.")
+    if summary is None:
+        need_model()
+    else:
+        model_rows = summary[summary["vehicle_class"] != ALL].copy()
+        if dash_vehicle:
+            model_rows = model_rows[model_rows["vehicle_class"].isin(dash_vehicle)]
+        model_rows = model_rows.sort_values("vehicle_class").reset_index(drop=True)
+        if model_rows.empty:
+            st.info("No fitted model for this vehicle type selection.")
+        else:
+            st.dataframe(
+                model_rows[["vehicle_class", "n", "base_fare", "rate_per_km", "drop_fee",
+                            "r2", "km_min", "km_max"]],
+                hide_index=True, width="stretch",
+                column_config={
+                    "vehicle_class": TxtCol("Car Type"),
+                    "n": NumCol("N", help="Trips available for this class (before outlier trimming).",
+                                format="%d"),
+                    "base_fare": NumCol("Base fare (THB)", help="Fixed cost per trip, before distance.",
+                                        format="%,.0f"),
+                    "rate_per_km": NumCol("Rate per km (THB/km)",
+                                          help="Marginal cost per extra km - the real 'price per km'.",
+                                          format="%.2f"),
+                    "drop_fee": NumCol("Extra-stop fee (THB)",
+                                       help="Added per stop beyond a plain A→B trip.", format="%,.0f"),
+                    "r2": NumCol("R²", help="How well distance (+ stops) explains price for this class "
+                                 "(1.0 = perfect fit; low = lots of scatter the model doesn't capture).",
+                                 format="%.2f"),
+                    "km_min": NumCol("Km min", help="Shortest trip this fit was built from.", format="%.0f"),
+                    "km_max": NumCol("Km max", help="Longest trip this fit was built from.", format="%.0f"),
+                })
+
     st.subheader("Per KM")
     per_km_src = priced[priced["total_km"] > 0].copy()
     per_km_src["price_per_km"] = per_km_src["price"] / per_km_src["total_km"]
@@ -853,7 +909,10 @@ with tab_dashboard:
                        for vc, g in per_km_src.groupby("vehicle_class")]
     if per_km_row_list:
         per_km_rows = pd.DataFrame(per_km_row_list).sort_values("Car Type").reset_index(drop=True)
-        st.dataframe(per_km_rows, hide_index=True, width="stretch",
+        st.caption("🟡 Highlighted rows are where a cut-off method actually trimmed something - its mean "
+                   "moved from the before-cut-off mean by more than 20 THB/km, i.e. this vehicle class has "
+                   "a wide outlier gap between its raw and trimmed averages.")
+        st.dataframe(highlight_diverging(per_km_rows, margin=20), hide_index=True, width="stretch",
                      column_config=dash_column_config("THB per km, after each method's outlier cutoff.",
                                                        decimals=2))
     else:
