@@ -45,7 +45,7 @@ def gas_divergence_value(g: pd.DataFrame) -> tuple[float, float, float] | None:
     """(diff, pct, eppo_base) median (billed top-of-band fuel rate) - (EPPO HSD B7 price on that
     trip's ship date), THB/litre and as a % of the EPPO price, plus the EPPO base price itself.
     None where no row has both sides present."""
-    mask = g["fuel_rate_high"].notna() & g["eppo_price"].notna()
+    mask = g["fuel_rate_low"].notna() & g["fuel_rate_high"].notna() & g["eppo_price"].notna()
     if not mask.any():
         return None
     base = g.loc[mask, "eppo_price"].median()
@@ -74,6 +74,27 @@ def gas_price_base_text(resolved: tuple[float, float, float, bool] | None) -> st
     return f"{base:.2f}{' (est.)' if estimated else ''}"
 
 
+def eppo_date_text(dates: pd.Series) -> str | None:
+    """Publish date(s) of the EPPO readings behind a route's base price, e.g. '20-Apr-2026' or
+    '02-Jan-2026 to 20-Apr-2026' when its trips matched different readings."""
+    d = dates.dropna()
+    if d.empty:
+        return None
+    lo, hi = d.min().strftime("%d-%b-%Y"), d.max().strftime("%d-%b-%Y")
+    return lo if lo == hi else f"{lo} to {hi}"
+
+
+def eppo_price_text(g: pd.DataFrame) -> str:
+    """Median EPPO price, or the reason there isn't one for this route."""
+    if g["eppo_price"].notna().any():
+        return f"{g['eppo_price'].median():.2f}"
+    if g["ship_date"].isna().all():
+        return "n/a - trips have no ship date"
+    if g["eppo_date"].isna().all():
+        return "n/a - no EPPO data loaded (run scripts/fetch_eppo_diesel.py)"
+    return "n/a - EPPO reading has no price"
+
+
 def gas_divergence_text(resolved: tuple[float, float, float, bool] | None) -> str | None:
     if resolved is None:
         return None
@@ -90,17 +111,19 @@ OTHER_CFG = {
         "EPPO Base Price",
         help="Median EPPO published HSD B7 diesel retail price (THB/litre) nearest each trip's ship "
              "date (data/eppo_diesel_hsd_b7.json, run scripts/fetch_eppo_diesel.py to update) - the "
-             "base the divergence next to it is measured against. Where the route has no billed fuel "
-             "clause at all, this falls back to the same car type's median (or the overall median if "
-             "that car type has none either), marked '(est.)'."),
+             "base the divergence next to it is measured against. Shown for every route, including "
+             "those with no billed fuel clause."),
+    "EPPO Reading Date": TxtCol(
+        "EPPO Reading Date",
+        help="Publish date of the EPPO reading(s) behind 'EPPO Base Price' (nearest to each trip's "
+             "ship date). A range means the route's trips matched different readings."),
     "Gas Price Divergence": TxtCol(
         "Gas Price Divergence",
         help="Median gap between the billed top-of-band fuel rate and the EPPO base price (see "
              "'EPPO Base Price' column) - THB/litre and as a % of the EPPO price. Positive = billed "
-             "above the published market price. Where the route has no billed fuel clause at all, "
-             "this falls back to the same car type's median divergence (or the overall median if "
-             "that car type has none either), marked '(est.)'; every trip otherwise gets EPPO's "
-             "nearest published reading, even past the newest date EPPO has published so far."),
+             "above the published market price. Blank where the route has no billed fuel clause "
+             "(no Gas Price Range). Each trip uses EPPO's nearest published reading, even past "
+             "the newest date EPPO has published so far."),
     "Existing pair price (min-max)": TxtCol(
         "Existing pair price (min-max)",
         help="Min-max range actually billed on this route. The alternative calculation method - "
@@ -299,15 +322,10 @@ def render(ctx):
         priced = priced[priced["vehicle_class"].isin(dash_vehicle)]
     if dash_customer:
         priced = priced[priced["customer"].isin(dash_customer)]
-    global_gas_divergence = gas_divergence_value(priced)
-    vehicle_gas_divergence = {
-        vc: gas_divergence_value(g) for vc, g in priced.groupby("vehicle_class")
-    }
     route_row_list = []
     for (vc, o, d), g in priced.groupby(["vehicle_class", "origin_c", "dest_c"]):
         sr = stats_row(g["price"].to_numpy())
-        fallback = vehicle_gas_divergence.get(vc) or global_gas_divergence
-        resolved = gas_divergence_resolved(g, fallback=fallback)
+        resolved = gas_divergence_resolved(g)
         route_row_list.append({
             "Car Type": vc, "Ori": o, "Dest": d,
             "Total KM": g["total_km"][g["total_km"] > 0].median(),
@@ -317,7 +335,8 @@ def render(ctx):
             "Gas Price Range": (f"{g['fuel_rate_low'].median():.2f}-{g['fuel_rate_high'].median():.2f}"
                                 if g["fuel_rate_low"].notna().any() and g["fuel_rate_high"].notna().any()
                                 else None),
-            "EPPO Base Price": gas_price_base_text(resolved),
+            "EPPO Base Price": eppo_price_text(g),
+            "EPPO Reading Date": eppo_date_text(g["eppo_date"]),
             "Gas Price Divergence": gas_divergence_text(resolved),
         })
     if route_row_list:

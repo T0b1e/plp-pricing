@@ -39,10 +39,13 @@ def load_trips() -> tuple[pd.DataFrame, str | None]:
         # by weeks/months, so a trip more recent than the latest reading still gets that reading
         # rather than being left blank. merge_asof needs both sides sorted on the join key
         dated = t[t["ship_date"].notna()].sort_values("ship_date")
-        matched = pd.merge_asof(dated, eppo, left_on="ship_date", right_on="date", direction="nearest")
+        matched = pd.merge_asof(dated, eppo.rename(columns={"date": "eppo_date"}),
+                                left_on="ship_date", right_on="eppo_date", direction="nearest")
         t["eppo_price"] = matched["eppo_price"].reindex(t.index)
+        t["eppo_date"] = matched["eppo_date"].reindex(t.index)
     else:
         t["eppo_price"] = np.nan
+        t["eppo_date"] = pd.NaT
     fuel_cols = ["fuel_rate_bracket", "fuel_rate_low", "fuel_rate_high"]
     t["total_km"] = np.nan
     for c in fuel_cols:
