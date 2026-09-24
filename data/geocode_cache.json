@@ -80741,5 +80741,62 @@
     }
    ]
   }
+ },
+ "ไทยกรีน": {
+  "places": {
+   "places": [
+    {
+     "id": "ChIJ4dembJ654jARbOMVm7Zi1iI",
+     "types": [
+      "manufacturer",
+      "point_of_interest",
+      "establishment"
+     ],
+     "formattedAddress": "30 85 หมู่ 1 ถ.เจษฎาวิถี ตำบล โคกขาม อำเภอเมืองสมุทรสาคร สมุทรสาคร 74000",
+     "location": {
+      "latitude": 13.5535258,
+      "longitude": 100.3360175
+     },
+     "displayName": {
+      "text": "บจก. ไทย กรีน เนชั่น คอร์ปอเรชั่น โรงงานนิคมอุตสาหกรรมสินสาคร",
+      "languageCode": "th"
+     }
+    },
+    {
+     "id": "ChIJ7WyShK2-4jAR1OdtPHrfi6U",
+     "types": [
+      "corporate_office",
+      "point_of_interest",
+      "establishment"
+     ],
+     "formattedAddress": "8/5 ตำบล คอกกระบือ ตำบล บางน้ำจืด อำเภอเมืองสมุทรสาคร สมุทรสาคร 74000",
+     "location": {
+      "latitude": 13.6119986,
+      "longitude": 100.33724289999999
+     },
+     "displayName": {
+      "text": "ไทยกรีน",
+      "languageCode": "th"
+     }
+    },
+    {
+     "id": "ChIJLaXeEhGW4jARtw_NKE3kGHE",
+     "types": [
+      "association_or_organization",
+      "point_of_interest",
+      "establishment"
+     ],
+     "formattedAddress": "40/94 ถ. คลองทวีวัฒนา แขวงหนองค้างพลู เขตหนองแขม กรุงเทพมหานคร 10160",
+     "location": {
+      "latitude": 13.7118166,
+      "longitude": 100.36464319999999
+     },
+     "displayName": {
+      "text": "ไทย กรีน เนชั่น คอร์ปอเรชั่น",
+      "languageCode": "th"
+     }
+    }
+   ]
+  }
  }
 }

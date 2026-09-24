@@ -118,6 +118,29 @@ def lookup(query: str, cache: dict) -> dict:
             "geocode_source": "not_found", "geocode_confidence": "none"}
 
 
+DUP_COLS = ["dup_coord_group", "dup_coord_count", "dup_coord_flag"]
+
+
+def flag_same_coords(loc: pd.DataFrame) -> pd.DataFrame:
+    """Mark canonical places that share identical lat/lon. Nothing is merged or removed: the
+    flag is for review, since one geocode may be right (spelling variants) or wrong (a note
+    or a different shop that landed on the same spot)."""
+    for c in DUP_COLS:
+        loc[c] = ""
+    ok = (loc["alias_of"] == "") & (loc["lat"] != "") & (loc["lon"] != "")
+    g = loc[ok].assign(_f=pd.to_numeric(loc.loc[ok, "frequency"], errors="coerce").fillna(0))
+    g = g[g.duplicated(["lat", "lon"], keep=False)]
+    order = g.groupby(["lat", "lon"])["_f"].sum().sort_values(ascending=False)
+    ids = {k: f"D{n:03d}" for n, k in enumerate(order.index, 1)}
+    for (lat, lon), x in g.groupby(["lat", "lon"]):
+        same = x["place_id"].nunique() == 1 and x["place_id"].iloc[0] != ""
+        loc.loc[x.index, "dup_coord_group"] = ids[(lat, lon)]
+        loc.loc[x.index, "dup_coord_count"] = str(len(x))
+        loc.loc[x.index, "dup_coord_flag"] = ("same coords, same place_id" if same
+                                              else "same coords, DIFFERENT place_id")
+    return loc
+
+
 def main(limit: int | None = None):
     loc = read_csv(LOCATIONS, dtype=str).fillna("")
     cache = load_cache()
@@ -151,7 +174,7 @@ def main(limit: int | None = None):
                 print(f"  geocoded {n}/{len(todo)}")
     finally:   # Ctrl+C or a fatal error: keep what was already looked up
         save_cache(cache)
-        write_csv(loc, LOCATIONS, index=False)
+        write_csv(flag_same_coords(loc), LOCATIONS, index=False)
 
     canon = loc[loc["alias_of"] == ""]
     print(f"[geocode] {len(todo)} places processed, {new_calls} new API lookups")
@@ -169,4 +192,7 @@ def main(limit: int | None = None):
 
 if __name__ == "__main__":
     import sys
+    if sys.argv[1:] == ["flag"]:   # refresh the duplicate-coordinate flags only, no API calls
+        write_csv(flag_same_coords(read_csv(LOCATIONS, dtype=str).fillna("")), LOCATIONS, index=False)
+        sys.exit()
     main(int(sys.argv[1]) if len(sys.argv) > 1 else None)

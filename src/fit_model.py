@@ -17,6 +17,7 @@ from .vehicles import vehicle_class, wheels
 MIN_N = 30
 BANDS = [0, 25, 50, 100, 200, 400, 800, 1500]
 BAND_LABELS = [f"{a}-{b}" for a, b in zip(BANDS, BANDS[1:])]
+TRAIN_STATUSES = ["CONFIRM", "POSTED"]
 HOLDOUT = 0.2
 SEED = 42
 ALL = "ALL"
@@ -29,10 +30,11 @@ def load_training() -> pd.DataFrame:
     df = read_csv(TRIPS_CLEAN)
     require_columns(df, ["vehicle_type", "total_km", "price", "stop_count", "status"], TRIPS_CLEAN.name)
     df["vehicle_class"] = df["vehicle_type"].fillna("").map(vehicle_class)
-    # CONFIRM = sent for billing, actually completed; OPEN/POSTED jobs may never have shipped
-    # and would otherwise pollute the price curve as outliers.
+    # CONFIRM = sent for billing, POSTED = job done, awaiting billing: both actually ran. Only
+    # CONFIRM left some classes (e.g. 10W dry: 14 of 1,611 trips) with too few trips for their
+    # own line. OPEN jobs may never have shipped and would pollute the price curve as outliers.
     df = df[df["vehicle_class"].notna() & df["total_km"].gt(0) & df["price"].gt(0)
-            & df["status"].eq("CONFIRM")].copy()
+            & df["status"].isin(TRAIN_STATUSES)].copy()
     df["extra_drops"] = (df["stop_count"] - 2).clip(lower=0)
     df["band"] = pd.cut(df["total_km"], BANDS, labels=BAND_LABELS, include_lowest=True)
     return df
@@ -147,7 +149,7 @@ def report(df, s):
     status_counts = all_rows["status"].value_counts().to_dict()
     print(f"[model] trained on {len(df):,} of {total:,} rows "
           f"({len(df) / total:.0%}); multi-stop rows: {(df['extra_drops'] > 0).sum():,}")
-    print(f"        status breakdown (all rows): {status_counts} - only CONFIRM is used for training")
+    print(f"        status breakdown (all rows): {status_counts} - only {' + '.join(TRAIN_STATUSES)} is used for training")
     src = df["km_source"].value_counts().to_dict() if "km_source" in df else {}
     print(f"        km source: {src}")
     if any(k != "routes" for k in src):
