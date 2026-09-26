@@ -1,0 +1,57 @@
+rows 31,629  train 25,372 (<= 2026-07-04)  test 6,257
+test trips whose customer is new: 2.6%
+
+== overall (time-based holdout) ==
+                                 MdAPE_%  MAPE_%  within10_%  within20_%  over50off_%  bias_med_%  MAE_THB
+model                                                                                                     
+linear (current)                    18.2    54.4        34.4        55.1         19.3         1.8   1236.8
+LightGBM                             2.8    13.8        81.2        89.5          2.7        -0.3    422.5
+hybrid (linear + LGBM residual)      2.9    13.4        80.2        89.2          2.6        -0.6    438.9
+random forest                        2.3    11.3        80.9        90.4          2.8        -0.2    369.7
+
+== MdAPE % by vehicle class (n = test trips) ==
+                  n  linear  lgbm  hybrid   rf
+vehicle_class                                 
+10W reefer     2844    22.8   1.3     1.6  1.2
+4W reefer      1732    14.8   3.4     3.7  3.3
+22W head        568     9.7   5.4     4.5  6.3
+6W reefer       448    15.2   4.3     3.4  2.8
+18W reefer      259     6.8   6.0     3.1  1.2
+10W dry         128     4.0   0.7     0.3  0.7
+22W reefer       92    52.6  29.5    45.7  0.7
+4W dry           79    14.7   4.2     4.9  5.8
+22W dry          48     4.5   2.0     3.0  0.1
+18W dry          36     0.7   1.2     2.7  0.4
+
+== MdAPE % by km band ==
+                n  linear  lgbm  hybrid
+kmb                                    
+(0, 50]      1980    23.1   2.2     2.9
+(50, 100]    1948    18.9   2.2     1.9
+(100, 200]   1838    11.7   3.6     3.2
+(200, 400]    384    12.1   3.6     6.0
+(400, 3000]   107    40.2   9.0     7.4
+
+== MdAPE % by whether the route appeared in training ==
+               n  linear  lgbm  hybrid    rf  lgbm_over50
+route_seen                                               
+False        713    24.5  14.4    16.8  15.3          8.6
+True        5544    17.0   2.2     2.5   1.7          1.9
+
+LGBM q10-q90 band: covers 74.8% of test trips (target 80%), median width 39% of prediction
+
+LGBM feature importance (% gain):
+customer          23.5
+route             22.5
+vehicle_class     17.5
+destination        9.7
+origin             9.6
+total_km           8.1
+direct_km          3.2
+job_type           2.6
+diesel             1.1
+extra_drops        0.7
+fuel_rate_high     0.7
+fuel_rate_low      0.6
+stop_count         0.3
+dow                0.1

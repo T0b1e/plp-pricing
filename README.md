@@ -1,6 +1,6 @@
 # Transport pricing: route cleanup + km → price estimator
 
-Turns the `Report AR_AP_*.xlsx` billing exports into a clean trip table with coordinates and
+Turns the `excel/Report AR_AP_*.xlsx` billing exports into a clean trip table with coordinates and
 road km, then fits a price curve per vehicle class.
 
 ## Setup

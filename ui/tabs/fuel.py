@@ -5,8 +5,9 @@ import streamlit as st
 
 from src.fit_model import ALL
 from ui.components import model_failed, need_model
+from ui.data import load_eppo_diesel
 from ui.config import CAT_PALETTE, FUEL_BLUE, MAX_FUEL_SERIES, NumCol, TxtCol
-from ui.stats import bin_rate_long, bin_rate_table, fuel_rate_monthly
+from ui.stats import ROUND_TRIP_RANGES, bin_rate_long, bin_rate_table, fuel_rate_monthly
 
 
 def render(ctx):
@@ -150,5 +151,20 @@ def render(ctx):
                            "up, not fit from data.")
             bin_cfg = {"Range (km)": TxtCol("Range (km)"), "km": NumCol("km", help="Representative km used for the estimate in this row", format="%d")}
             st.dataframe(bin_rate_table(summary, rates), hide_index=True, width="stretch", column_config=bin_cfg)
+            st.subheader("Estimated price by round-trip distance range")
+            st.caption("ระยะทางไป-กลับ: 6W classes only, 20 km round-trip bands from 100 to 2060 km. Each is priced at its "
+                       "one-way km (half the band midpoint, shown in 'km'). '*' = outside that class's data.")
+            rt_cfg = {"Range (km)": TxtCol("Round-trip range (km)"),
+                      "km": NumCol("One-way km", help="Half the band midpoint, used for the estimate", format="%.1f")}
+            rt = bin_rate_table(summary, rates, ranges=ROUND_TRIP_RANGES)
+            rt = rt[[c for c in rt.columns if c in ("Range (km)", "km") or c.startswith("6W")]]
+            eppo = load_eppo_diesel()
+            if not eppo.empty:
+                last = eppo.iloc[-1]
+                rt["Current EPPO diesel (THB/L)"] = last["eppo_price"]
+                rt_cfg["Current EPPO diesel (THB/L)"] = NumCol(
+                    "Current EPPO diesel (THB/L)", format="%.2f",
+                    help=f"Latest EPPO HSD B7 price, published {last['date']:%d %b %Y}")
+            st.dataframe(rt, hide_index=True, width="stretch", column_config=rt_cfg)
         except Exception as e:
             model_failed(e)

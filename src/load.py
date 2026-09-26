@@ -6,7 +6,7 @@ position because the header repeats (วันที่ขึ้นสินค�
 import pandas as pd
 
 from .files import DataFileError
-from .paths import ROOT, SOURCE_FILES, TRIPS_RAW
+from .paths import EXCEL, SOURCE_FILES, TRIPS_RAW
 
 # Column A..AP, in order.
 COLUMNS = [
@@ -83,7 +83,7 @@ def load_one(path) -> pd.DataFrame:
 
 def load_all() -> pd.DataFrame:
     if not SOURCE_FILES:
-        raise DataFileError(f"No 'Report AR_AP_*.xlsx' files found in {ROOT}.")
+        raise DataFileError(f"No 'Report AR_AP_*.xlsx' files found in {EXCEL}.")
     df = pd.concat([load_one(p) for p in SOURCE_FILES], ignore_index=True)
     for col in NUMERIC:
         num = pd.to_numeric(df[col], errors="coerce")

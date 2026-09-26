@@ -79,7 +79,13 @@ BIN_RANGES = [
 ]
 
 
-def bin_rate_table(summary: pd.DataFrame, rates: pd.DataFrame, stops: int = 2) -> pd.DataFrame:
+# 20 km round-trip (ไป-กลับ) bands, 100-2060. Priced at the one-way km (half the band midpoint).
+ROUND_TRIP_RANGES = [(f"{lo}-{lo + 19}" if lo > 100 else "100-120", (lo + (lo + 19 if lo > 100 else 120)) / 4)
+                     for lo in [100] + list(range(121, 2061, 20))]
+
+
+def bin_rate_table(summary: pd.DataFrame, rates: pd.DataFrame, stops: int = 2,
+                   ranges: list | None = None) -> pd.DataFrame:
     """One row per distance bin, one column per vehicle class - a quick overview grid.
 
     Cells are formatted THB strings with a trailing '*' where the km is outside that vehicle
@@ -87,7 +93,7 @@ def bin_rate_table(summary: pd.DataFrame, rates: pd.DataFrame, stops: int = 2) -
     """
     classes = summary.loc[summary["vehicle_class"] != ALL].sort_values("n", ascending=False)["vehicle_class"].tolist()
     rows = []
-    for label, km in BIN_RANGES:
+    for label, km in (ranges or BIN_RANGES):
         row = {"Range (km)": label, "km": km}
         for name in classes:
             e = estimate(km, name, stops, summary, rates)

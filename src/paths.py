@@ -2,9 +2,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+EXCEL = ROOT / "excel"
 DATA.mkdir(exist_ok=True)
 
-SOURCE_FILES = sorted(ROOT.glob("Report AR_AP_*.xlsx"))
+SOURCE_FILES = sorted(EXCEL.glob("Report AR_AP_*.xlsx"))
 
 TRIPS_RAW = DATA / "trips_raw.parquet"
 TRIPS_PARSED = DATA / "trips_parsed.parquet"
