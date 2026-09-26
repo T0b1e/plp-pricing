@@ -19,6 +19,12 @@ def render_sidebar(trips: pd.DataFrame, locs: pd.DataFrame, summary, km_warning,
         trips = trips[trips["status"].isin(selected_statuses)]
     else:
         st.warning("No status selected - showing every trip regardless of status.")
+    only_invoiced = st.checkbox("Only trips with an invoice no.", value=False,
+                                help="Keep only trips whose bill no. (เลขที่บิล) is filled in.")
+    cache_key = tuple(selected_statuses)
+    if only_invoiced:
+        trips = trips[trips["bill_no"].fillna("").astype(str).str.strip() != ""]
+        cache_key += ("has_invoice",)   # statuses double as the cache key for trip-derived stats
     st.caption(f"{len(trips):,} of {status_counts.sum():,} trips shown after the status filter above.")
     st.metric("Trips with a route (2+ stops)", f"{len(trips):,}")
     dates = trips["ship_date"].dropna()
@@ -32,4 +38,4 @@ def render_sidebar(trips: pd.DataFrame, locs: pd.DataFrame, summary, km_warning,
         if w:
             st.warning(w)
     reload_button()
-    return trips, tuple(selected_statuses)
+    return trips, cache_key
