@@ -18,3 +18,6 @@ MODEL_SUMMARY = DATA / "model_summary.csv"
 
 # EPPO HSD B7 diesel reference price cache - see scripts/fetch_eppo_diesel.py
 EPPO_DIESEL = DATA / "eppo_diesel_hsd_b7.json"
+
+# VIN -> vehicle/driver/inspection/repair mapping - see scripts/map_vin_data.py
+VIN_MAPPING = ROOT / "output" / "vin_mapping.json"

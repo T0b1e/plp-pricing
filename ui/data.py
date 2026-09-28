@@ -7,7 +7,7 @@ import streamlit as st
 
 from src.aliases import canonical_map
 from src.files import DataFileError, read_csv, require_columns
-from src.paths import EPPO_DIESEL, LOCATIONS, MODEL_SUMMARY, RATE_TABLE, TRIPS_CLEAN, TRIPS_PARSED
+from src.paths import EPPO_DIESEL, LOCATIONS, MODEL_SUMMARY, RATE_TABLE, TRIPS_CLEAN, TRIPS_PARSED, VIN_MAPPING
 from src.vehicles import vehicle_class
 
 
@@ -92,3 +92,29 @@ def load_model():
     if not (MODEL_SUMMARY.exists() and RATE_TABLE.exists()):
         return None, None
     return read_csv(MODEL_SUMMARY), read_csv(RATE_TABLE)
+
+
+@st.cache_resource(show_spinner="Loading vehicle/driver data…")
+def load_vin_mapping() -> pd.DataFrame:
+    """One row per VIN (scripts/map_vin_data.py): vehicle info + flattened driver names.
+
+    Empty frame (not an error) if the mapping script hasn't been run yet.
+    """
+    if not VIN_MAPPING.exists():
+        return pd.DataFrame()
+    with VIN_MAPPING.open(encoding="utf-8") as f:
+        raw = json.load(f)
+    rows = []
+    for vin, rec in raw.items():
+        rows.append({
+            "vin": vin,
+            "license_plate": rec.get("license_plate"),
+            "vehicle_brand": rec.get("vehicle_brand"),
+            "vehicle_model": rec.get("vehicle_model"),
+            "vehicle_type": rec.get("vehicle_type"),
+            "site": rec.get("site"),
+            "drivers": ", ".join(d["full_name"] for d in rec.get("drivers", [])),
+            "n_inspections": len(rec.get("inspections", [])),
+            "n_repair_tickets": sum(len(i.get("repair_tickets", [])) for i in rec.get("inspections", [])),
+        })
+    return pd.DataFrame(rows)

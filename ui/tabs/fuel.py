@@ -4,8 +4,8 @@ import streamlit as st
 
 from src.fit_model import ALL
 from ui.components import model_failed, need_model
-from ui.config import CAT_PALETTE, FUEL_BLUE, MAX_FUEL_SERIES, NumCol, TxtCol
-from ui.stats import bin_rate_long, bin_rate_table, fuel_rate_monthly
+from ui.config import CAT_PALETTE, NumCol, TxtCol
+from ui.stats import bin_rate_long, bin_rate_table
 
 
 def render(ctx):
@@ -25,52 +25,6 @@ def render(ctx):
         m2.metric("Customers with a fuel clause", f"{fd['customer'].nunique():,}",
                   help=f"of {trips['customer'].nunique():,} customers total")
         m3.metric("Date range", f"{fd['ship_date'].min():%b %Y} – {fd['ship_date'].max():%b %Y}")
-
-        fd_customers = sorted(fd["customer"].dropna().unique())
-        cmp_customers = st.multiselect(
-            "Compare specific customers (optional)", fd_customers, max_selections=MAX_FUEL_SERIES,
-            help="Each customer's contract can reference a different band. Leave empty for the overall "
-                 "trend across every customer pooled together.")
-
-        # --- time series: per-customer lines, or pooled median + min/max band ---
-        st.subheader("Fuel rate over time")
-        if cmp_customers:
-            g = fuel_rate_monthly(fd[fd["customer"].isin(cmp_customers)], "customer")
-            if g.empty:
-                st.info("No fuel-rate data for that selection.")
-            else:
-                chart = alt.Chart(g).mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=40)).encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("median:Q", title="Fuel rate (THB/litre)"),
-                    color=alt.Color("customer:N", title="Customer",
-                                    scale=alt.Scale(domain=cmp_customers, range=CAT_PALETTE[:len(cmp_customers)])),
-                    tooltip=[alt.Tooltip("month:T", title="Month", format="%b %Y"),
-                             alt.Tooltip("customer:N", title="Customer"),
-                             alt.Tooltip("median:Q", title="Median rate", format=".2f"),
-                             alt.Tooltip("n:Q", title="Trips")],
-                ).properties(height=360)
-                st.altair_chart(chart, width="stretch")
-                st.caption("One line per selected customer: that month's median top-of-band fuel rate.")
-        else:
-            g = fuel_rate_monthly(fd)
-            if g.empty:
-                st.info("No fuel-rate data for that selection.")
-            else:
-                base = alt.Chart(g).encode(x=alt.X("month:T", title="Month"))
-                band = base.mark_area(opacity=0.15, color=FUEL_BLUE).encode(
-                    y=alt.Y("min:Q", title="Fuel rate (THB/litre)"), y2="max:Q")
-                line = base.mark_line(strokeWidth=2, color=FUEL_BLUE,
-                                      point=alt.OverlayMarkDef(size=40, color=FUEL_BLUE)).encode(
-                    y=alt.Y("median:Q", title="Fuel rate (THB/litre)"),
-                    tooltip=[alt.Tooltip("month:T", title="Month", format="%b %Y"),
-                             alt.Tooltip("median:Q", title="Median rate", format=".2f"),
-                             alt.Tooltip("min:Q", title="Min", format=".2f"),
-                             alt.Tooltip("max:Q", title="Max", format=".2f"),
-                             alt.Tooltip("n:Q", title="Trips")],
-                )
-                st.altair_chart((band + line).properties(height=360), width="stretch")
-                st.caption("Line = median top-of-band fuel rate across every customer pooled together, "
-                           "by month billed. Shaded band = that month's min–max across all customers/routes.")
 
     st.divider()
     st.subheader("Estimated price by distance range × vehicle class")

@@ -17,7 +17,7 @@ from ui.components import reload_button   # noqa: E402  (after set_page_config, 
 from ui.context import Ctx   # noqa: E402
 from ui.data import load_locations, load_model, load_trips   # noqa: E402
 from ui.sidebar import render_sidebar   # noqa: E402
-from ui.tabs import dashboard, fuel, route, variability   # noqa: E402
+from ui.tabs import dashboard, fuel, route, variability, vehicles   # noqa: E402
 
 try:
     trips, km_warning = load_trips()
@@ -42,8 +42,8 @@ ctx = Ctx(trips, locs, summary, rates, statuses)
 
 st.title("Transport price lookup")
 # The old "By km" tab is disabled (unused); its code is in git history before the ui/ split.
-tab_dashboard, tab_route, tab_summary, tab_fuel = st.tabs(
-    ["Dashboard", "Route history", "Price variability", "Fuel rate"])
+tab_dashboard, tab_route, tab_summary, tab_fuel, tab_vehicles = st.tabs(
+    ["Dashboard", "Route history", "Price variability", "Fuel rate", "Vehicles"])
 with tab_dashboard:
     dashboard.render(ctx)
 with tab_route:
@@ -52,3 +52,5 @@ with tab_summary:
     variability.render(ctx)
 with tab_fuel:
     fuel.render(ctx)
+with tab_vehicles:
+    vehicles.render(ctx)
