@@ -1,13 +1,11 @@
 """Fuel rate tab: diesel-price bands billed over time, plus the model's price by distance range."""
 import altair as alt
-import numpy as np
 import streamlit as st
 
 from src.fit_model import ALL
 from ui.components import model_failed, need_model
-from ui.data import load_eppo_diesel
 from ui.config import CAT_PALETTE, FUEL_BLUE, MAX_FUEL_SERIES, NumCol, TxtCol
-from ui.stats import ROUND_TRIP_RANGES, bin_rate_long, bin_rate_table, fuel_rate_monthly
+from ui.stats import bin_rate_long, bin_rate_table, fuel_rate_monthly
 
 
 def render(ctx):
@@ -28,16 +26,11 @@ def render(ctx):
                   help=f"of {trips['customer'].nunique():,} customers total")
         m3.metric("Date range", f"{fd['ship_date'].min():%b %Y} – {fd['ship_date'].max():%b %Y}")
 
-        f1, f2 = st.columns([3, 2])
         fd_customers = sorted(fd["customer"].dropna().unique())
-        cmp_customers = f1.multiselect(
+        cmp_customers = st.multiselect(
             "Compare specific customers (optional)", fd_customers, max_selections=MAX_FUEL_SERIES,
             help="Each customer's contract can reference a different band. Leave empty for the overall "
                  "trend across every customer pooled together.")
-        veh_opts = sorted(fd["vehicle_class"].dropna().unique())
-        veh_filter = f2.multiselect("Vehicle class", veh_opts, default=veh_opts)
-        if veh_filter:
-            fd = fd[fd["vehicle_class"].isin(veh_filter)]
 
         # --- time series: per-customer lines, or pooled median + min/max band ---
         st.subheader("Fuel rate over time")
@@ -79,24 +72,6 @@ def render(ctx):
                 st.caption("Line = median top-of-band fuel rate across every customer pooled together, "
                            "by month billed. Shaded band = that month's min–max across all customers/routes.")
 
-        # --- bar chart: how many trips reference each fuel-rate band ---
-        st.subheader("How common each fuel-rate band is")
-        bc = fd.drop_duplicates("job_order_no")[["fuel_rate_bracket", "fuel_rate_low"]].copy()
-        bc = bc.groupby("fuel_rate_bracket").agg(trips=("fuel_rate_bracket", "size"),
-                                                  low=("fuel_rate_low", "first")).reset_index()
-        bc["low"] = bc["low"].fillna(-np.inf)
-        bc = bc.sort_values("low")
-        order = bc["fuel_rate_bracket"].tolist()
-        bar = alt.Chart(bc).mark_bar(color=FUEL_BLUE, size=14).encode(
-            x=alt.X("fuel_rate_bracket:N", title="Fuel-rate band (THB/litre)", sort=order,
-                    axis=alt.Axis(labelAngle=-60)),
-            y=alt.Y("trips:Q", title="Trips"),
-            tooltip=[alt.Tooltip("fuel_rate_bracket:N", title="Band"), alt.Tooltip("trips:Q", title="Trips")],
-        ).properties(height=280)
-        st.altair_chart(bar, width="stretch")
-        st.caption("Number of billed trips that reference each fuel-rate band, low to high. Bands come "
-                   "straight from the route text, so a customer's contract can use a narrow or wide band.")
-
     st.divider()
     st.subheader("Estimated price by distance range × vehicle class")
     st.caption("Model price (THB/trip, A→B) at a representative km within each range. Ranges are picked "
@@ -109,9 +84,8 @@ def render(ctx):
         try:
             all_classes = (summary.loc[summary["vehicle_class"] != ALL]
                             .sort_values("n", ascending=False)["vehicle_class"].tolist())
-            chart_vehicles = st.multiselect(
-                "Compare vehicle classes", all_classes, default=all_classes[:5],
-                help="Lines shown on the chart below. The table further down always lists every class.")
+            sidebar_classes = set(trips["vehicle_class"].dropna().unique())
+            chart_vehicles = [v for v in all_classes if v in sidebar_classes]
             if chart_vehicles:
                 long_df = bin_rate_long(summary, rates, chart_vehicles)
                 color_scale = alt.Scale(domain=chart_vehicles, range=CAT_PALETTE[:len(chart_vehicles)])
@@ -151,20 +125,5 @@ def render(ctx):
                            "up, not fit from data.")
             bin_cfg = {"Range (km)": TxtCol("Range (km)"), "km": NumCol("km", help="Representative km used for the estimate in this row", format="%d")}
             st.dataframe(bin_rate_table(summary, rates), hide_index=True, width="stretch", column_config=bin_cfg)
-            st.subheader("Estimated price by round-trip distance range")
-            st.caption("ระยะทางไป-กลับ: 6W classes only, 20 km round-trip bands from 100 to 2060 km. Each is priced at its "
-                       "one-way km (half the band midpoint, shown in 'km'). '*' = outside that class's data.")
-            rt_cfg = {"Range (km)": TxtCol("Round-trip range (km)"),
-                      "km": NumCol("One-way km", help="Half the band midpoint, used for the estimate", format="%.1f")}
-            rt = bin_rate_table(summary, rates, ranges=ROUND_TRIP_RANGES)
-            rt = rt[[c for c in rt.columns if c in ("Range (km)", "km") or c.startswith("6W")]]
-            eppo = load_eppo_diesel()
-            if not eppo.empty:
-                last = eppo.iloc[-1]
-                rt["Current EPPO diesel (THB/L)"] = last["eppo_price"]
-                rt_cfg["Current EPPO diesel (THB/L)"] = NumCol(
-                    "Current EPPO diesel (THB/L)", format="%.2f",
-                    help=f"Latest EPPO HSD B7 price, published {last['date']:%d %b %Y}")
-            st.dataframe(rt, hide_index=True, width="stretch", column_config=rt_cfg)
         except Exception as e:
             model_failed(e)

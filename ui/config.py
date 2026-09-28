@@ -93,6 +93,10 @@ PAIR_CFG = {   # pair_rollup(): one row per origin -> destination + vehicle clas
                               "more from trip to trip in a typical month"),
     "max_cv_pct": NumCol("Worst monthly CV (%)", format="%.1f%%",
                          help="The single month with the highest S.D. ÷ mean price for this pair"),
+    "avg_cv_pct_mad": NumCol("Avg monthly CV, MAD-cleaned (%)", format="%.1f%%",
+                             help="Same as Avg monthly CV, but after dropping MAD-based price outliers"),
+    "max_cv_pct_mad": NumCol("Worst monthly CV, MAD-cleaned (%)", format="%.1f%%",
+                             help="Same as Worst monthly CV, but after dropping MAD-based price outliers"),
 }
 
 PAIR_MONTH_CFG = {   # pair_rollup() filtered to one calendar month
@@ -109,6 +113,8 @@ PAIR_MONTH_CFG = {   # pair_rollup() filtered to one calendar month
     "cv_pct": NumCol("CV (%)", format="%.1f%%",
                      help="S.D. ÷ mean, as a percentage - how spread out prices were this month "
                           "relative to their average"),
+    "cv_pct_mad": NumCol("CV, MAD-cleaned (%)", format="%.1f%%",
+                         help="Same CV, but after dropping MAD-based price outliers"),
 }
 
 MONTHLY_CFG = {   # monthly stats for one selected pair

@@ -160,15 +160,24 @@ def pair_price_stats(_trips: pd.DataFrame, statuses: tuple[str, ...], drop_outli
     return d.groupby(["origin_c", "dest_c", "vehicle_class"])["price"].median().reset_index(name="price")
 
 
-def pair_rollup(monthly: pd.DataFrame, price_stats: pd.DataFrame) -> pd.DataFrame:
-    """One row per (origin, dest, vehicle class): months of data, total trips, price, avg/worst monthly CV."""
+def pair_rollup(monthly: pd.DataFrame, price_stats: pd.DataFrame,
+                monthly_mad: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per (origin, dest, vehicle class): months of data, total trips, price, avg/worst monthly CV.
+
+    If monthly_mad (the same stats after the MAD-outlier filter) is given, adds avg_cv_pct_mad /
+    max_cv_pct_mad alongside the unfiltered columns; pairs with no month left after filtering get NaN.
+    """
     if monthly.empty:
         return monthly
-    g = monthly.groupby(["origin_c", "dest_c", "vehicle_class"])
+    key = ["origin_c", "dest_c", "vehicle_class"]
+    g = monthly.groupby(key)
     out = g.agg(months=("month", "nunique"), trips=("trips", "sum"),
                 avg_cv_pct=("cv_pct", "mean"), max_cv_pct=("cv_pct", "max"))
     out = out.sort_values("avg_cv_pct", ascending=False).reset_index()
-    out = out.merge(price_stats, on=["origin_c", "dest_c", "vehicle_class"], how="left")
+    if monthly_mad is not None and not monthly_mad.empty:
+        mad = monthly_mad.groupby(key)["cv_pct"].agg(avg_cv_pct_mad="mean", max_cv_pct_mad="max").reset_index()
+        out = out.merge(mad, on=key, how="left")
+    out = out.merge(price_stats, on=key, how="left")
     out.insert(0, "rank", range(1, len(out) + 1))
     return out
 

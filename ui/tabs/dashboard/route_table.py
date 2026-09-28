@@ -6,7 +6,7 @@ from .constants import MAP_CFG, OTHER_CFG
 from .formatters import (eppo_date_text, eppo_price_range_text, eppo_price_text, gas_median_range_text,
                          maps_route_url, gas_divergence_text)
 from .stats import dash_column_config, gas_divergence_resolved, stats_row
-from .styling import blank_repeated_labels, diverging_mask, highlight_diverging, with_summary_row
+from .styling import blank_repeated_labels, highlight_diverging, with_summary_row
 
 
 def build_route_rows(priced: pd.DataFrame) -> pd.DataFrame:
@@ -46,20 +46,16 @@ def build_route_rows(priced: pd.DataFrame) -> pd.DataFrame:
 
 
 def route_table_section(priced: pd.DataFrame) -> None:
-    """Per-route price averages table with its two filters and colour legend."""
+    """Per-route price averages table with its filter and colour legend."""
     route_rows = build_route_rows(priced)
 
     if route_rows.empty:
         st.info("No billed trips match this vehicle type / customer combination.")
         return
 
-    # ── Filters ──
-    f1, f2 = st.columns(2)
-    diverge_only = f1.checkbox("Show only diverging rows (cut-off actually trimmed something)")
-    fuel_only = f2.checkbox("Only routes with fuel-range data")
+    # ── Filter ──
+    fuel_only = st.checkbox("Only routes with fuel-range data")
 
-    if diverge_only:
-        route_rows = route_rows[diverging_mask(route_rows)].reset_index(drop=True)
     if fuel_only:
         route_rows = route_rows[route_rows["Gas Price Range"].notna()].reset_index(drop=True)
 

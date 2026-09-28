@@ -14,12 +14,7 @@ def render(ctx):
     min_trips = st.number_input("Minimum trips per pair per month", min_value=2, value=3, step=1,
                                 help="Months with fewer billed trips than this are left out - S.D. on "
                                      "1-2 points isn't meaningful")
-    drop_outliers = st.checkbox(
-        "Drop MAD-based price outliers before computing spread", value=True,
-        help="For each origin → destination + vehicle class, flags trips whose price is more than "
-             "3× a floored MAD-based scale away from that group's median price, then leaves them out "
-             "of the S.D./CV numbers below - a few odd bills shouldn't make a route look more volatile "
-             "than it is. Flagged trips are still visible (not deleted) in the per-trip table further down.")
+    drop_outliers = True
     all_trips_for_variability = trips[(trips["price"] > 0) & trips["ship_date"].notna()]
     n_flagged = int(flag_price_outliers(all_trips_for_variability,
                                         ["origin_c", "dest_c", "vehicle_class"]).sum())
@@ -27,13 +22,16 @@ def render(ctx):
                f"outliers{' and left out below' if drop_outliers else ' (shown below, not left out)'}.")
     monthly = monthly_pair_stats(trips, ctx.statuses, int(min_trips), drop_outliers)
     price_stats = pair_price_stats(trips, ctx.statuses, drop_outliers)
+    # ranking table always shows both: raw CV, and CV after the MAD filter as an extra column
+    monthly_raw = monthly_pair_stats(trips, ctx.statuses, int(min_trips), False)
+    monthly_mad = monthly_pair_stats(trips, ctx.statuses, int(min_trips), True)
 
-    if monthly.empty:
+    if monthly_raw.empty:
         st.info("No pair + month has enough trips at this threshold yet - lower the minimum above.")
     else:
         # --- ranking table: all pairs, either averaged or for one selected month ---
         st.subheader("Pairs ranked by monthly price deviation")
-        month_opts = ["All months (averaged)"] + sorted(monthly["month"].unique(), reverse=True)
+        month_opts = ["All months (averaged)"] + sorted(monthly_raw["month"].unique(), reverse=True)
         rollup_month = st.selectbox("Month", month_opts, key="rollup_month",
                                     help="Averaging across months can hide that a high CV came from a "
                                          "month with very few trips. Pick a month to see each pair's "
@@ -44,8 +42,9 @@ def render(ctx):
                        "outlier filter above, if on). **Avg monthly CV** is the "
                        "coefficient of variation (S.D. ÷ mean price) averaged across that pair's months - "
                        "the higher it is, the more this pair's price swings around from trip to trip in a "
-                       "typical month. **Worst monthly CV** is its single worst month.")
-            rollup = pair_rollup(monthly, price_stats)
+                       "typical month. **Worst monthly CV** is its single worst month. The **MAD-cleaned** "
+                       "columns are the same CVs after dropping MAD-based price outliers.")
+            rollup = pair_rollup(monthly_raw, price_stats, monthly_mad)
             st.dataframe(medal_rank_style(rollup), hide_index=True, width="stretch", column_config=PAIR_CFG)
         else:
             st.caption("One row per origin → destination + vehicle class, for this month only. "

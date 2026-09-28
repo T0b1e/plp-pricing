@@ -25,6 +25,8 @@ def load_trips() -> tuple[pd.DataFrame, str | None]:
     t["dest_c"] = t["destination"].map(lambda s: canon.get(s, s))
     t["vehicle_class"] = t["vehicle_type"].fillna("").map(vehicle_class)
     t["stops_txt"] = t["stops"].map(" > ".join)
+    # drop points = every stop between origin and destination (spelling variants merged)
+    t["drops_txt"] = t["stops"].map(lambda s: " > ".join(canon.get(p, p) for p in list(s)[1:-1]))
     # "13.584565, 100.276712" per place, built once as a dict: a per-row lookup cost ~5 s on every click
     loc = read_csv(LOCATIONS, dtype=str).fillna("")
     loc = loc[(loc["alias_of"] == "") & (loc["lat"] != "") & (loc["lon"] != "")]

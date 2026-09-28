@@ -9,12 +9,16 @@ from ui.stats import cutoff_price_stats
 
 from .constants import COLOR_BLUE, COLOR_GREEN, COLOR_RED, MAP_CFG, OTHER_CFG
 from .formatters import maps_route_url
-from .styling import blank_repeated_labels
 
 
-def _join_unique(values: pd.Series) -> str:
-    """Sorted, de-duplicated, comma-joined non-blank values (for invoice / job-order cells)."""
-    return ", ".join(sorted({str(v) for v in values.dropna() if str(v).strip()}))
+def _join_unique(values: pd.Series, sep: str = ", ") -> str:
+    """Sorted, de-duplicated, joined non-blank values (for invoice / job-order cells)."""
+    return sep.join(sorted({str(v) for v in values.dropna() if str(v).strip()}))
+
+
+def _join_drops(values: pd.Series) -> str:
+    """Distinct drop-point sequences of a pair's trips, one per ' | ' (blank when it has no middle stop)."""
+    return _join_unique(values, " | ")
 
 
 def pair_divergence_frame(per_km_src: pd.DataFrame) -> pd.DataFrame:
@@ -29,7 +33,8 @@ def pair_divergence_frame(per_km_src: pd.DataFrame) -> pd.DataFrame:
         km=("total_km", "median"), existing=("price", "mean"), p_min=("price", "min"),
         p_max=("price", "max"), trips=("price", "size"),
         o_ll=("origin_latlon", "first"), d_ll=("dest_latlon", "first"),
-        bills=("bill_no", _join_unique), jobs=("job_order_no", _join_unique)).reset_index()
+        bills=("bill_no", _join_unique), jobs=("job_order_no", _join_unique),
+        drops=("drops_txt", _join_drops)).reset_index()
 
     # Per-km method price vs what was actually billed
     pairs["per_km"] = pairs["vehicle_class"].map(rate)
@@ -49,7 +54,8 @@ def _pair_table_frame(pairs: pd.DataFrame) -> pd.DataFrame:
 
     table["Existing pair price (min-max)"] = table["p_min"].map("{:,.0f}".format) + "-" + table["p_max"].map("{:,.0f}".format)
 
-    show = table[["Car Type", "Ori", "Dest", "Total KM", "Per km (THB/km)", "Per-km price", "Existing pair price",
+    table["Drop points"] = table["drops"]
+    show = table[["Car Type", "Ori", "Drop points", "Dest", "Total KM", "Per km (THB/km)", "Per-km price", "Existing pair price",
                   "Existing pair price (min-max)", "Divergence (THB)", "Divergence (%)", "Trips"]].copy()
     show["Invoice / bill no."] = table["bills"]
     show["Job order"] = table["jobs"]
@@ -68,43 +74,79 @@ def _pair_summary_row(show: pd.DataFrame) -> dict:
             "Trips": show["Trips"].sum()}
 
 
-def _pair_invoices(per_km_src: pd.DataFrame, vc: str, o: str, d: str) -> None:
-    """Drill-down: the billed trips (invoices) behind one pair's existing price."""
-    inv = per_km_src[(per_km_src["vehicle_class"] == vc) & (per_km_src["origin_c"] == o)
-                     & (per_km_src["dest_c"] == d)].sort_values("ship_date", ascending=False)
-
-    st.markdown(f"**Invoices - {vc}: {o} → {d}** ({len(inv):,} trips, "
-                f"{inv['bill_no'].nunique():,} bills)")
-    st.dataframe(inv[["bill_no", "job_order_no", "ship_date", "customer", "status", "plate", "total_km", "price"]]
-                 .rename(columns={"bill_no": "Invoice / bill no.", "job_order_no": "Job order",
-                                  "ship_date": "Ship date", "customer": "Customer", "status": "Status",
-                                  "plate": "Plate", "total_km": "Road km", "price": "Billed price"}),
-                 hide_index=True, width="stretch",
-                 column_config={"Road km": NumCol("Road km", format="%,.0f"),
-                                "Billed price": NumCol("Billed price", format="%,.0f")})
+def _divergence_donut(charts: pd.DataFrame) -> None:
+    """Donut of each car type's share of the total divergence (THB)."""
+    # ── Donut: each car type's share of the total divergence (THB) ──
+    st.markdown("**Divergence by car type (sum over pairs)**")
+    st.caption("Slice size = the car type's total divergence in absolute THB (a pie can't show negatives); the tooltip and "
+               "label give the signed sum. Positive = per-km quotes higher than billed, negative = lower.")
+    div = charts.groupby("vehicle_class").agg(total=("diverge", "sum"), pairs=("diverge", "size")).reset_index()
+    div["abs_total"] = div["total"].abs()
+    if div["abs_total"].sum() > 0:
+        div["share"] = div["abs_total"] / div["abs_total"].sum()
+        div["label"] = div["total"].map("{:+,.0f}".format)
+        donut = alt.Chart(div).encode(
+            theta=alt.Theta("abs_total:Q", stack=True),
+            # tableau20 has 20 distinct hues; the default 10-colour scheme repeats once there are >10 car types
+            color=alt.Color("vehicle_class:N", title="Car type", sort=sorted(div["vehicle_class"]),
+                            scale=alt.Scale(scheme="tableau20")),
+            tooltip=[alt.Tooltip("vehicle_class:N", title="Car type"),
+                     alt.Tooltip("total:Q", title="Sum divergence (THB)", format="+,.0f"),
+                     alt.Tooltip("share:Q", title="Share of |divergence|", format=".1%"),
+                     alt.Tooltip("pairs:Q", title="Pairs")])
+        st.altair_chart((donut.mark_arc(innerRadius=60, outerRadius=120)
+                         + donut.mark_text(radius=145, size=12).encode(text="label:N")).properties(height=320),
+                        width="stretch")
 
 
 def _pair_charts(pairs: pd.DataFrame, tol: float) -> None:
     """Band-share bar chart + divergence-vs-distance and per-km-vs-existing scatters for the pair table."""
-    # ── Band each pair: matched / per-km above / per-km below ──
-    band_order = [f"Matched (within ±{tol:g}%)", f"Per-km above (>{tol:g}%)", f"Per-km below (>{tol:g}%)"]
-    band_scale = alt.Scale(domain=band_order, range=["#2196f3", "#ff5252", "#00c853"])
+    # ── Level 1: matched vs not matched. Level 2: why not matched (per-km above / below) ──
+    match_order = [f"Matched (within ±{tol:g}%)", f"Not matched (>{tol:g}%)"]
+    why_order = [f"Per-km higher (>{tol:g}% above)", f"Per-km lower (>{tol:g}% below)"]
 
     charts = pairs.dropna(subset=["diverge_pct"]).copy()
-    charts["Band"] = np.where(charts["diverge_pct"].abs() <= tol, band_order[0],
-                              np.where(charts["diverge_pct"] > 0, band_order[1], band_order[2]))
     charts["Route"] = charts["origin_c"] + " → " + charts["dest_c"]
+    charts["Match"] = np.where(charts["diverge_pct"].abs() <= tol, match_order[0], match_order[1])
+    charts["Band"] = np.where(charts["diverge_pct"] > 0, why_order[0], why_order[1])
+    height = max(80, 50 * charts["vehicle_class"].nunique())
 
-    # ── Share of pairs by band (stacked 100% bar per car type) ──
-    st.markdown("**Share of pairs by band**")
-    bar = alt.Chart(charts).mark_bar().encode(
+    # ── Chart 1: share of pairs matched vs not matched (stacked 100% bar per car type) ──
+    st.markdown("**Share of pairs: matched vs not matched**")
+    match_bar = alt.Chart(charts).mark_bar().encode(
         y=alt.Y("vehicle_class:N", title="Car type"),
         x=alt.X("count():Q", stack="normalize", title="Share of pairs", axis=alt.Axis(format="%")),
-        color=alt.Color("Band:N", scale=band_scale, title="Band", sort=band_order),
-        order=alt.Order("Band:N"),
-        tooltip=[alt.Tooltip("vehicle_class:N", title="Car type"), alt.Tooltip("Band:N"),
+        color=alt.Color("Match:N", scale=alt.Scale(domain=match_order, range=["#2196f3", "#8a8f98"]),
+                        title=None, sort=match_order),
+        order=alt.Order("Match:N"),
+        tooltip=[alt.Tooltip("vehicle_class:N", title="Car type"), alt.Tooltip("Match:N", title="Result"),
                  alt.Tooltip("count():Q", title="Pairs")])
-    st.altair_chart(bar.properties(height=max(80, 50 * charts["vehicle_class"].nunique())), width="stretch")
+    st.altair_chart(match_bar.properties(height=height), width="stretch")
+
+    # ── Chart 2: of the not-matched pairs, per-km higher vs lower (pairs and % within not-matched) ──
+    miss = charts[charts["Match"] == match_order[1]]
+    if miss.empty:
+        _divergence_donut(charts)
+        return
+
+    st.markdown("**Why not matched: per-km higher or lower than the existing pair price**")
+    st.caption("Only the not-matched pairs. Labels show the number of pairs and its share of that car type's not-matched pairs.")
+    why = miss.groupby(["vehicle_class", "Band"]).size().rename("pairs").reset_index()
+    why["share"] = why["pairs"] / why.groupby("vehicle_class")["pairs"].transform("sum")
+    why["label"] = why["pairs"].astype(str) + " (" + (why["share"] * 100).round(0).astype(int).astype(str) + "%)"
+
+    why_bar = alt.Chart(why).encode(
+        y=alt.Y("vehicle_class:N", title="Car type"),
+        x=alt.X("pairs:Q", stack="normalize", title="Share of not-matched pairs", axis=alt.Axis(format="%")),
+        color=alt.Color("Band:N", scale=alt.Scale(domain=why_order, range=["#ff5252", "#00c853"]),
+                        title=None, sort=why_order),
+        order=alt.Order("Band:N"),
+        tooltip=[alt.Tooltip("vehicle_class:N", title="Car type"), alt.Tooltip("Band:N", title="Reason"),
+                 alt.Tooltip("pairs:Q", title="Pairs"), alt.Tooltip("share:Q", title="Share", format=".0%")])
+    st.altair_chart((why_bar.mark_bar() + why_bar.mark_text(color="white").encode(text="label:N")
+                     ).properties(height=height), width="stretch")
+
+    _divergence_donut(charts)
 
     # ── Divergence vs distance (scatter) ──
     # st.markdown("**Divergence vs distance**")
@@ -185,20 +227,11 @@ def _pair_charts(pairs: pd.DataFrame, tol: float) -> None:
 
 
 def pair_divergence_section(per_km_src: pd.DataFrame):
-    """Per origin -> destination + class: per-km price vs existing billed price, with drill-down."""
+    """Per origin -> destination + class: per-km price vs existing billed price."""
     st.subheader("Per KM and existing pair price")
 
     if per_km_src.empty:
         st.info("No trips with road km match this vehicle type / customer combination.")
-        return
-
-    # ── Car-type filter ──
-    car_opts = sorted(per_km_src["vehicle_class"].unique())
-    car_sel = st.multiselect("Car type", car_opts, default=car_opts, key="pair_div_car_type",
-                             help="Show only these truck classes. All selected by default.")
-    per_km_src = per_km_src[per_km_src["vehicle_class"].isin(car_sel)]
-    if per_km_src.empty:
-        st.info("Select at least one car type.")
         return
 
     # ── Build the table ──
@@ -208,27 +241,14 @@ def pair_divergence_section(per_km_src: pd.DataFrame):
     #            "in THB and as a % of the existing price; positive = per-km method quotes higher.")
     show = _pair_table_frame(pairs)
 
-    # ── Controls: match tolerance + ranking ──
-    rank_col, tol_col = st.columns([3, 1])
-    tol = tol_col.number_input("Matched within (±%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0,
-                               key="pair_div_tol",
-                               help="Per-km price counts as matched (blue) when its divergence is within this "
-                                    "many % of the existing pair price. Above it is red, below it is green.")
-    rank_by = rank_col.radio("Rank divergence by", ["Default order", "Per-km highest above (%)", "Per-km furthest below (%)",
-                                                    "Largest gap either way (%)"], horizontal=True, key="pair_div_rank",
-                             help="Sort the pair table by how far the per-km price is from the existing pair price.")
+    # ── Control: match tolerance ──
+    tol = st.number_input("Matched within (±%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0,
+                          key="pair_div_tol",
+                          help="Per-km price counts as matched (blue) when its divergence is within this "
+                               "many % of the existing pair price. Above it is red, below it is green.")
 
-    if rank_by != "Default order":
-        pct = show["Divergence (%)"]
-        key = {"Per-km highest above (%)": -pct, "Per-km furthest below (%)": pct}.get(rank_by, -pct.abs())
-        show = show.loc[key.sort_values(kind="stable").index].reset_index(drop=True)
-        show.insert(0, "Rank", range(1, len(show) + 1))
-
-    # Remember which pair each row is, before repeated labels are blanked out
-    row_keys = list(zip(show["Car Type"], show["Ori"], show["Dest"]))
-
-    if rank_by == "Default order":
-        blank_repeated_labels(show)
+    # Car Type stays on every row so it survives a column-header sort; only a repeated Ori is blanked
+    show.loc[(show["Car Type"] == show["Car Type"].shift()) & (show["Ori"] == show["Ori"].shift()), "Ori"] = ""
 
     n_pairs = len(show)
     show = pd.concat([show, pd.DataFrame([_pair_summary_row(show)])], ignore_index=True)
@@ -244,27 +264,20 @@ def pair_divergence_section(per_km_src: pd.DataFrame):
     styled = show.style.apply(
         lambda col: [_div_color(p) for p in show["Divergence (%)"]], subset=["Divergence (%)", "Divergence (THB)"])
 
-    # ── Table (click a row to drill into its invoices) ──
+    # ── Table ──
     st.caption(f"{n_pairs:,} pairs shown. Last row sums Per-km price and Existing pair price over every pair shown; "
                "its divergence is the total gap. Divergence cells: 🔵 blue = per-km price matches the existing pair "
                f"price (within ±{tol:g}%), 🔴 red = per-km price is more than {tol:g}% higher, 🟢 green = per-km "
                f"price is more than {tol:g}% lower.")
-    st.caption("Click a row to list the billed trips (invoices) behind its existing pair price.")
 
-    sel = st.dataframe(styled, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
-                       key="pair_div_table", column_config={
+    st.dataframe(styled, hide_index=True, width="stretch", column_config={
         **MAP_CFG, "Existing pair price (min-max)": OTHER_CFG["Existing pair price (min-max)"],
         "Per km (THB/km)": NumCol("Per km (THB/km)", format="%,.2f"),
         "Per-km price": NumCol("Per-km price", format="%,.0f"),
         "Existing pair price": NumCol("Existing pair price", format="%,.0f"),
         "Divergence (THB)": NumCol("Divergence (THB)", format="%+,.0f"),
         "Divergence (%)": NumCol("Divergence (%)", format="%+.1f"),
-        "Trips": NumCol("Trips", format="%d"), "Rank": NumCol("Rank", format="%d")})
-
-    # The SUMMARY row (last) has no invoices, so only real pair rows count
-    picked_rows = [i for i in sel.selection.rows if i < n_pairs]
-    if picked_rows:
-        _pair_invoices(per_km_src, *row_keys[picked_rows[0]])
+        "Trips": NumCol("Trips", format="%d")})
 
     # st.download_button("Download table (CSV)", show.to_csv(index=False).encode("utf-8-sig"),
     #                    file_name="per_km_vs_existing_pair_price.csv", mime="text/csv", key="pair_div_download")

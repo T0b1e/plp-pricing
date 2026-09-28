@@ -19,7 +19,6 @@ def per_km_section(per_km_src: pd.DataFrame) -> None:
 
     per_km_rows = pd.DataFrame(per_km_row_list).sort_values("Car Type").reset_index(drop=True)
 
-    st.caption("Click a row to see its cost breakdown.")
     sel = st.dataframe(highlight_diverging(with_summary_row(per_km_rows, "vehicle types"), margin=20),
                        hide_index=True, width="stretch",
                        column_config=dash_column_config("THB per km, after each method's outlier cutoff.",

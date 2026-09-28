@@ -26,10 +26,12 @@ def render(ctx):
     # 1) Per-route price averages
     route_table_section(priced)
 
-    # 2) Per-km vs existing pair price (needs a road distance to compute THB/km)
+    # Road distance is needed to compute THB/km
     per_km_src = priced[priced["total_km"] > 0].copy()
     per_km_src["price_per_km"] = per_km_src["price"] / per_km_src["total_km"]
-    pair_divergence_section(per_km_src)
 
-    # 3) Per-class THB/km + cost breakdown dialog
+    # 2) Per-class THB/km + cost breakdown dialog (the rate the pair table below builds on)
     per_km_section(per_km_src)
+
+    # 3) Per-km vs existing pair price
+    pair_divergence_section(per_km_src)
